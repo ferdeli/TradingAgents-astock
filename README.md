@@ -27,6 +27,7 @@
   <a href="#7-个-analyst-角色">Analyst 角色</a> ·
   <a href="#数据源">数据源</a> ·
   <a href="#快速开始">快速开始</a> ·
+  <a href="#6-进阶使用v060-新增">进阶使用</a> ·
   <a href="#web-ui">Web UI</a> ·
   <a href="#常见问题排错">排错</a>
 </p>
@@ -245,6 +246,8 @@ print(decision)
 ```bash
 tradingagents                 # 交互式 CLI
 tradingagents analyze         # 同上（默认命令）
+tradingagents scan            # 批量筛选（条件 → 标的池 CSV，见「进阶使用」）
+tradingagents batch           # 批量分析（标的池 → 汇总决策，见「进阶使用」）
 tradingagents performance     # 决策绩效统计（见下）
 tradingagents --help          # 查看所有选项
 ```
@@ -274,6 +277,81 @@ tradingagents performance --json     # 机器读的 JSON
 
 ---
 
+### 6. 进阶使用（v0.6.0 新增）
+
+在单标的分析之上，v0.6.0 叠加了四类能力：**执行建议、持仓管理、批量筛选分析、K线呈现**。
+
+#### 6.1 执行建议（M1）
+
+单标的分析自动附带：评级为 **Buy / Overweight** 时，报告新增「VI. Execution Advice」章节，
+给出**买入区间、止损位、目标价、建议仓位**（研究参考，非投资建议）。
+
+- **仓位由确定性规则计算**：`min(风险预算 / 止损距离, 20%)`（默认风险预算 1.5%）——LLM 只出价位，仓位由公式反推，杜绝幻觉
+- **价位强校验**：不满足 `止损 < 现价 < 目标` 时整段置为 N/A，不硬填
+- **Hold / Sell 不消耗 LLM 调用**：直接给出「观望 / 离场」占位，不编造买入价位
+- 展示位置：CLI 报告 `reports/{ticker}_{时间戳}/complete_report.md` 的「VI」章节、Web 报告页「📐 执行建议」
+
+#### 6.2 持仓管理（M2）
+
+把当前持仓传给分析流程，决策会附带**持仓操作建议**（持有/加仓/减仓/清仓 + 目标仓位 + 盈亏）。
+
+```bash
+tradingagents analyze --holdings holdings.json
+```
+
+`holdings.json` 格式：
+
+```json
+[{"code": "600519", "name": "贵州茅台", "quantity": 100, "cost_price": 1400.0}]
+```
+
+- 按 `code`（6 位数字，前缀/后缀容忍，如 `600519` / `sh600519`）或 `name`（精确全称）匹配当前分析标的
+- 匹配到时，Portfolio Manager 额外输出 `position_action`（hold / add / reduce / exit）与 `target_position_pct`，报告显示持仓盈亏
+- **不传持仓时输出与旧版完全一致**（向后兼容）
+- Web：侧栏「💼 当前持仓（可选）」粘贴同格式 JSON 即可
+
+#### 6.3 批量筛选分析（M3 + M4）
+
+**第一步：筛选标的池**（纯数据层，**零 LLM 调用**）
+
+```bash
+tradingagents scan --industry 半导体 --pe-min 10 --pe-max 40 --mktcap-min 100 --limit 20 -o pool.csv
+```
+
+| 条件 | 参数 | 说明 |
+|------|------|------|
+| 行业 | `--industry` | 可多次传入（`--industry 半导体 --industry 军工`） |
+| 市盈率 | `--pe-min` / `--pe-max` | 亏损股（PE 为负/缺失）不参与区间匹配 |
+| 总市值 | `--mktcap-min` | 亿元；默认排除 ST/退市（`--include-st` 可保留） |
+| 涨跌幅 | `--chg-min` | 当日涨跌幅下限（%） |
+| 候选上限 | `--limit` | 默认 20，最大 200 |
+
+所有东财请求走统一限流入口（`_em_get`），批量场景建议 `EM_MIN_INTERVAL=1.5~2`。
+
+**第二步：批量分析**（对池中每只标的跑完整多 Agent 图，输出排序汇总）
+
+```bash
+tradingagents batch --pool pool.csv --limit 5 [--quick] [--trade-date 2026-08-12]
+# 或直接给标的列表
+tradingagents batch --tickers 600519,000001 --limit 2
+```
+
+- **成本闸门**：执行前打印 LLM 调用量预估并确认（全量约 17 次调用/标的，5 只 ≈ 85 次）
+- `--quick` 快速模式：只跑 4 个核心分析师，省约 30% 调用
+- **失败隔离**：单个标的失败不中断整批，失败清单单独列出原因
+- 输入逐个过 `safe_ticker_component` 校验（中文名/非法代码在此兜底）
+- 输出 `reports/batch_{时间戳}/summary.md`：按评级排序的汇总表（评级 / 执行建议 / 一页理由）+ 每标的全量报告目录
+
+#### 6.4 K线呈现（M5）
+
+Web 报告页新增「📈 K线走势与预测」：历史 120 根真实 K 线 + 预测区（10 根虚线蜡烛）。
+
+- 预测**锚定执行建议的目标价/止损位**（Buy → 目标价；Sell → 止损位；无执行建议时按评级系数回退），中间路径为固定 seed 的可复现随机游走
+- 预测区明确标注「示意」，仅供研究参考，**不是真实行情**；不使用 LLM 生成 K 线（避免幻觉）
+- 数据来自分析时的 OHLCV 快照，历史报告重开仍可查看
+
+---
+
 ## Web UI
 
 内置 Streamlit 可视化界面，支持在侧边栏选择 LLM 供应商和模型，输入股票代码即可一键分析，适合不写代码的用户。
@@ -295,7 +373,9 @@ streamlit run web/app.py
 - **模型自选**：侧边栏支持 10 个 LLM 供应商切换（MiniMax/DeepSeek/Qwen/GLM/OpenAI/Anthropic/Google/xAI/OpenRouter/Ollama），外加 **「OpenAI 兼容（自定义 base_url）」** 一档可接任意 OpenAI 兼容网关（9Router / AI Router / 自建代理）
 - **一键分析**：输入 6 位 A 股代码 + 分析日期 +「数据起始日期」（默认本月第一天，可自定义技术分析回溯区间，支持按月/自定义时段分析），点击「开始分析」
 - **实时进度**：12 阶段 pipeline 实时显示（7 分析师 → 质量门控 → 辩论 → 风控 → 决策），所有已完成阶段的报告均可展开查看
-- **完整报告**：信号卡片（Buy/Hold/Sell）、7 份分析师报告、多空辩论、风控评估
+- **完整报告**：信号卡片（Buy/Hold/Sell）、7 份分析师报告、多空辩论、风控评估、**执行建议**（买入区间/止损/目标/仓位，v0.6.0）
+- **持仓管理**（v0.6.0）：侧栏「💼 当前持仓（可选）」粘贴 JSON，分析持仓标的时决策附带操作建议（持有/加仓/减仓/清仓）
+- **K线走势**（v0.6.0）：报告页展示历史 K 线与预测走势（虚线标注「示意」，锚定执行建议的目标/止损位）
 - **报告导出**：一键下载 **Markdown**（零依赖，永远可用）或 **PDF** 完整分析报告（PDF 自动适配 Windows/macOS/Linux 中文字体）
 - **历史记录**：自动保存并展示所有历史分析
 

@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import List, Optional
 import datetime
 import typer
 from pathlib import Path
@@ -981,7 +981,31 @@ def format_tool_args(args, max_length=80) -> str:
         return result[:max_length - 3] + "..."
     return result
 
-def run_analysis(checkpoint: bool = False):
+def _load_holdings(path: Path) -> list:
+    """Load and validate a holdings JSON file: [{code, name, quantity, cost_price}].
+
+    Fails fast with a clear message on a missing file or a malformed entry —
+    a silently-empty holdings list would silently disable holding guidance.
+    """
+    import json
+
+    if not path.exists():
+        raise typer.BadParameter(f"holdings file not found: {path}")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise typer.BadParameter(f"holdings file is not valid JSON: {exc}") from exc
+    if not isinstance(data, list):
+        raise typer.BadParameter("holdings file must contain a JSON array")
+    for i, h in enumerate(data):
+        if not isinstance(h, dict) or not h.get("code"):
+            raise typer.BadParameter(
+                f"holdings[{i}] must be an object with at least a 'code' field"
+            )
+    return data
+
+
+def run_analysis(checkpoint: bool = False, holdings: Optional[Path] = None):
     # First get all user selections
     selections = get_user_selections()
 
@@ -994,6 +1018,8 @@ def run_analysis(checkpoint: bool = False):
     config["deep_think_llm"] = selections["deep_thinker"]
     config["backend_url"] = selections["backend_url"]
     config["llm_provider"] = selections["llm_provider"].lower()
+    if holdings is not None:
+        config["holdings"] = _load_holdings(holdings)
     # Provider-specific thinking configuration
     config["google_thinking_level"] = selections.get("google_thinking_level")
     config["openai_reasoning_effort"] = selections.get("openai_reasoning_effort")
@@ -1305,12 +1331,24 @@ def analyze(
         "--clear-checkpoints",
         help="Delete all saved checkpoints before running (force fresh start).",
     ),
+    holdings: Optional[Path] = typer.Option(
+        None,
+        "--holdings",
+        help="JSON file with current holdings: [{\"code\", \"name\", \"quantity\", \"cost_price\"}]. "
+             "Matching positions get holding-management guidance in the decision.",
+    ),
 ):
     if clear_checkpoints:
         from tradingagents.graph.checkpointer import clear_all_checkpoints
         n = clear_all_checkpoints(DEFAULT_CONFIG["data_cache_dir"])
         console.print(f"[yellow]Cleared {n} checkpoint(s).[/yellow]")
-    run_analysis(checkpoint=checkpoint)
+    # The bare-run path (callback → analyze()) does not pass `holdings`, in
+    # which case the raw typer.OptionInfo object lands here — treat anything
+    # that is not a real Path as "no holdings" (upstream bare-run contract).
+    if isinstance(holdings, Path):
+        run_analysis(checkpoint=checkpoint, holdings=holdings)
+    else:
+        run_analysis(checkpoint=checkpoint)
 
 
 @app.command()
@@ -1334,6 +1372,139 @@ def performance(
         console.print_json(_json.dumps(summary, ensure_ascii=False))
         return
     console.print(Markdown(format_report(summary)))
+
+
+@app.command()
+def scan(
+    industry: List[str] = typer.Option(
+        [], "--industry", help="所属行业（可多次传入，如 --industry 半导体 --industry 军工）"
+    ),
+    pe_min: Optional[float] = typer.Option(None, "--pe-min", help="市盈率下限"),
+    pe_max: Optional[float] = typer.Option(None, "--pe-max", help="市盈率上限"),
+    mktcap_min: Optional[float] = typer.Option(
+        None, "--mktcap-min", help="总市值下限（亿元）"
+    ),
+    chg_min: Optional[float] = typer.Option(None, "--chg-min", help="涨跌幅下限（%）"),
+    include_st: bool = typer.Option(
+        False, "--include-st", help="不过滤 ST/退市股（默认过滤）"
+    ),
+    limit: int = typer.Option(20, "--limit", min=1, max=200, help="候选池上限"),
+    output: Path = typer.Option(
+        Path("pool.csv"), "--output", "-o", help="候选池 CSV 输出路径（供 batch 使用）"
+    ),
+):
+    """按条件筛选 A 股标的池（纯数据层，零 LLM 调用），输出 CSV。
+
+    条件之间为 AND 关系；所有东财请求走统一限流入口 _em_get。
+    批量场景建议先设 EM_MIN_INTERVAL=1.5~2 再跑。
+    """
+    from tradingagents.scanner.scanner import ScreenCriteria, run_screen
+
+    criteria = ScreenCriteria(
+        industries=industry,
+        pe_min=pe_min,
+        pe_max=pe_max,
+        mktcap_min=mktcap_min,
+        chg_min=chg_min,
+        exclude_st=not include_st,
+        limit=limit,
+    )
+    with console.status("[bold cyan]扫描全市场…[/bold cyan]"):
+        pool = run_screen(criteria)
+    if not pool:
+        console.print("[yellow]没有标的满足条件[/yellow]")
+        raise typer.Exit(code=0)
+    import pandas as pd
+
+    df = pd.DataFrame(pool)
+    df.to_csv(output, index=False, encoding="utf-8-sig")
+    console.print(f"[green]✓ 命中 {len(pool)} 只标的 → {output}[/green]")
+    table = Table(title="筛选结果", box=box.ROUNDED)
+    for col in ("code", "name", "price", "chg_pct", "mktcap", "pe", "industry"):
+        table.add_column(col)
+    for _, r in df.iterrows():
+        table.add_row(str(r["code"]), str(r["name"]), str(r["price"]),
+                      str(r["chg_pct"]), f"{r['mktcap'] / 1e8:.0f}亿",
+                      str(r["pe"]), str(r["industry"]))
+    console.print(table)
+
+
+@app.command()
+def batch(
+    pool: Optional[Path] = typer.Option(
+        None, "--pool", help="标的池 CSV（scan 输出，取 code 列）；与 --tickers 二选一"
+    ),
+    tickers: Optional[str] = typer.Option(
+        None, "--tickers", help="逗号分隔标的列表，如 600519,000001；与 --pool 二选一"
+    ),
+    trade_date: Optional[str] = typer.Option(
+        None, "--trade-date", help="分析日期 YYYY-MM-DD（默认今天）"
+    ),
+    limit: int = typer.Option(5, "--limit", min=1, max=50, help="每批上限（成本闸门）"),
+    quick: bool = typer.Option(
+        False, "--quick", help="快速模式：只跑 4 个核心分析师（省约 30% 调用）"
+    ),
+    yes: bool = typer.Option(False, "--yes", help="跳过成本确认直接执行"),
+    results_dir: Path = typer.Option(
+        Path("reports"), "--results-dir", help="汇总报告输出目录"
+    ),
+):
+    """批量分析：对标的池逐个跑完整分析图，输出排序汇总报告。
+
+    每个标的独立失败隔离（单个失败不中断整批）；所有输入过
+    safe_ticker_component 校验。执行前先打印 LLM 调用量预估并确认。
+    """
+    from tradingagents.batch.runner import estimate_calls, run_batch
+    from tradingagents.batch.report import render_summary
+
+    if (pool is None) == (tickers is None):
+        console.print("[red]必须且只能提供 --pool 或 --tickers 之一[/red]")
+        raise typer.Exit(code=2)
+    if pool is not None:
+        if not pool.exists():
+            console.print(f"[red]pool 文件不存在: {pool}[/red]")
+            raise typer.Exit(code=2)
+        import pandas as pd
+        df = pd.read_csv(pool)
+        if "code" not in df.columns:
+            console.print("[red]pool CSV 缺少 code 列[/red]")
+            raise typer.Exit(code=2)
+        code_list = [str(c) for c in df["code"].tolist()]
+    else:
+        code_list = [c.strip() for c in tickers.split(",") if c.strip()]
+
+    trade_date = trade_date or datetime.date.today().strftime("%Y-%m-%d")
+    n = min(len(code_list), limit)
+    calls = estimate_calls(n, quick)
+    console.print(
+        f"[bold]批量计划[/bold]: {n} 个标的 × "
+        f"{'快速' if quick else '全量'}模式 ≈ [yellow]{calls} 次 LLM 调用[/yellow] "
+        f"(日期 {trade_date})"
+    )
+    if not yes:
+        if not typer.confirm("继续执行？"):
+            console.print("[dim]已取消[/dim]")
+            raise typer.Exit(code=0)
+
+    config = DEFAULT_CONFIG.copy()
+    results = run_batch(code_list, trade_date, config=config, quick=quick, limit=limit)
+
+    # Persist per-ticker full reports + the summary
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_root = results_dir / f"batch_{ts}"
+    out_root.mkdir(parents=True, exist_ok=True)
+    for r in results:
+        if r.status != "ok":
+            continue
+        try:
+            save_report_to_disk(r.state, r.code, out_root / r.code)
+        except Exception as exc:  # noqa: BLE001 — report persistence must not kill the batch
+            console.print(f"[yellow]报告落盘失败 {r.code}: {exc}[/yellow]")
+    summary_file = out_root / "summary.md"
+    summary_file.write_text(render_summary(results), encoding="utf-8")
+
+    console.print(f"\n[green]✓ 批量完成，汇总: {summary_file}[/green]")
+    console.print(Markdown(render_summary(results)))
 
 
 if __name__ == "__main__":

@@ -1,11 +1,33 @@
 # TradingAgents/graph/propagation.py
 
+import re
 from typing import Dict, Any, List, Optional
 from tradingagents.agents.utils.agent_states import (
     AgentState,
     InvestDebateState,
     RiskDebateState,
 )
+
+
+def _digits(value: object) -> str:
+    """Extract the numeric part of a code, e.g. 'sh600519' / '600519' -> '600519'."""
+    return re.sub(r"\D", "", str(value))
+
+
+def _holding_matches(holding: Dict[str, Any], company_name: str) -> bool:
+    """True when a holding entry corresponds to the analysed instrument.
+
+    Matches on the 6-digit code (normalised, prefix/suffix tolerant) or on an
+    exact Chinese/display name. No fuzzy/partial matching, so unrelated
+    names never leak into the prompt.
+    """
+    code = _digits(holding.get("code", ""))
+    name = str(holding.get("name", "")).strip()
+    target_code = _digits(company_name)
+    target_name = str(company_name).strip()
+    if code and len(code) >= 6 and code == target_code:
+        return True
+    return bool(name) and name == target_name
 
 
 class Propagator:
@@ -18,12 +40,24 @@ class Propagator:
     def create_initial_state(
         self, company_name: str, trade_date: str, past_context: str = ""
     ) -> Dict[str, Any]:
-        """Create the initial state for the agent graph."""
+        """Create the initial state for the agent graph.
+
+        ``holdings`` is injected from the current config, filtered to entries
+        that match ``company_name`` (6-digit code or exact name), so the
+        Portfolio Manager can produce holding-management guidance.
+        """
+        from tradingagents.dataflows.config import get_config
+
+        all_holdings = get_config().get("holdings", []) or []
+        matching = [
+            h for h in all_holdings if _holding_matches(h, company_name)
+        ]
         return {
             "messages": [("human", company_name)],
             "company_of_interest": company_name,
             "trade_date": str(trade_date),
             "past_context": past_context,
+            "holdings": matching,
             "investment_debate_state": InvestDebateState(
                 {
                     "bull_history": "",

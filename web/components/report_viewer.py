@@ -173,3 +173,22 @@ def render_report(
         st.markdown("### 📐 执行建议（研究参考）")
         st.markdown(_display_report_text(exec_advice, ticker, final_state))
         st.markdown("---")
+
+    # M5: K-line + forecast (best-effort — never crashes the report page)
+    try:
+        from tradingagents.charting.kline import build_chart_data
+        from web.components.kline_viewer import render_kline
+
+        st.markdown("### 📈 K线走势与预测")
+        chart = build_chart_data(
+            ticker, trade_date,
+            advice_md=exec_advice,
+            rating=final_state.get("final_trade_decision", ""),
+        )
+        if chart is not None:
+            render_kline(st, chart)
+        else:
+            st.caption("K线数据暂不可用（OHLCV 获取失败）")
+        st.markdown("---")
+    except Exception:  # noqa: BLE001 — charting must never crash the page
+        st.caption("K线展示暂不可用")

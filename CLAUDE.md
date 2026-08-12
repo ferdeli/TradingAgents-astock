@@ -6,7 +6,7 @@
 - **仓库**: https://github.com/simonlin1212/TradingAgents-astock
 - **协议**: Apache 2.0
 - **Python**: >=3.10
-- **当前版本**: 0.5.14（2026-08-09 发布，经 codex 九轮审计）
+- **当前版本**: 0.6.0（M1-M5：执行建议 / 持仓管理 / 筛选器 / 批量分析 / K线呈现）
   ⚠️ 改版本号时**三处要一起改**：`pyproject.toml` / `CHANGELOG.md` / 这一行。漏了这行会让后续 agent 和发版流程读到旧版本（`tests/test_version_consistency.py` 会拦）。
 
 ## 架构
@@ -37,7 +37,7 @@
 
 ### 常用命令
 - 安装: `pip install -e .`（Gemini 需显式补装，见下方依赖冲突；可选 `pip install -e ".[agentsdk]"`）
-- CLI: `tradingagents`（`tradingagents --help`）
+- CLI: `tradingagents`（`tradingagents --help`；子命令 `analyze` / `scan` 筛选 / `batch` 批量 / `performance`）
 - Web UI: `streamlit run web/app.py`，或 `tradingagents-web`（`web/launch.py`）
 - 测试: `python -m pytest tests/ -v`（markers: `unit` / `integration` / `smoke`，`--strict-markers`）
 - 改动后务必跑测试，新增依赖后跑 `uv lock --dry-run` 验证

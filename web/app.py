@@ -193,6 +193,16 @@ def _build_config() -> dict:
             config["agent_sdk_model"] = sub_model
     if scope == "all":
         config["quick_think_provider_override"] = "claude_agent_sdk"
+    # M2: holdings from the sidebar JSON box (kept in session_state).
+    holdings = st.session_state.get("holdings_json", "").strip()
+    if holdings:
+        try:
+            import json
+            parsed = json.loads(holdings)
+            if isinstance(parsed, list):
+                config["holdings"] = parsed
+        except json.JSONDecodeError:
+            pass  # invalid JSON in the box → run without holdings, never crash
     return config
 
 

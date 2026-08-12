@@ -530,7 +530,10 @@ def _tencent_quote(codes: list[str]) -> dict[str, dict]:
 # ---------------------------------------------------------------------------
 
 _DATACENTER_URL = "https://datacenter-web.eastmoney.com/api/data/v1/get"
-_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
 
 
 # ---------------------------------------------------------------------------
