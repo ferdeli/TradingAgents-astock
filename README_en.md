@@ -232,6 +232,8 @@ print(decision)
 ```bash
 tradingagents                 # Interactive CLI
 tradingagents analyze         # Same as above (default command)
+tradingagents scan            # Screener (criteria → candidate pool CSV, see "Advanced Usage")
+tradingagents batch           # Batch analysis (pool → summarized decisions, see "Advanced Usage")
 tradingagents performance     # Decision performance report (see below)
 tradingagents --help          # Show all options
 ```
@@ -260,6 +262,80 @@ Important caveats:
 - Records whose return cannot be parsed are **skipped, not counted as 0%** — counting them would quietly drag every statistic toward neutral.
 
 ---
+
+### 6. Advanced Usage (added in v0.6.0)
+
+On top of single-ticker analysis, v0.6.0 adds four capabilities: **execution advice, holdings management, batch screening/analysis, and K-line charts**.
+
+#### 6.1 Execution Advice (M1)
+
+Automatically included in every single-ticker analysis: when the rating is **Buy / Overweight**, the report gains a "VI. Execution Advice" section with **entry zone, stop-loss, target price, and suggested position size** (research reference, not an investment advisory signal).
+
+- **Position size is derived by a deterministic rule**: `min(risk budget / stop distance, 20%)` (default risk budget 1.5%) — the LLM proposes price levels only; the percentage comes from the formula, so it cannot hallucinate a size
+- **Hard validation**: levels that violate `stop < price < target` are replaced with N/A rather than trusted
+- **Hold / Sell costs no LLM calls**: a "watch / exit" placeholder is returned instead of fabricated entry levels
+- Where it shows: CLI report `reports/{ticker}_{timestamp}/complete_report.md` "VI" section, Web report page "📐 执行建议"
+
+#### 6.2 Holdings Management (M2)
+
+Pass your current holdings into the analysis and the decision gains **holding-action guidance** (hold / add / reduce / exit + target position % + PnL).
+
+```bash
+tradingagents analyze --holdings holdings.json
+```
+
+`holdings.json` format:
+
+```json
+[{"code": "600519", "name": "贵州茅台", "quantity": 100, "cost_price": 1400.0}]
+```
+
+- Matching is by `code` (6 digits, prefix/suffix tolerant, e.g. `600519` / `sh600519`) or exact `name` (full Chinese name)
+- When matched, the Portfolio Manager additionally outputs `position_action` (hold / add / reduce / exit) and `target_position_pct`, and the report shows holding PnL
+- **Without holdings the output is byte-identical to the previous version** (backward compatible)
+- Web: paste the same JSON into the sidebar "💼 Current Holdings (optional)" box
+
+#### 6.3 Batch Screening & Analysis (M3 + M4)
+
+**Step 1: screen the candidate pool** (pure data layer, **zero LLM calls**)
+
+```bash
+tradingagents scan --industry 半导体 --pe-min 10 --pe-max 40 --mktcap-min 100 --limit 20 -o pool.csv
+```
+
+| Criteria | Flag | Notes |
+|----------|------|-------|
+| Industry | `--industry` | repeatable (`--industry 半导体 --industry 军工`) |
+| P/E | `--pe-min` / `--pe-max` | loss-makers (negative/missing PE) never match a range |
+| Market cap | `--mktcap-min` | in 100M CNY; ST/delisting excluded by default (`--include-st` keeps them) |
+| Change % | `--chg-min` | intraday change lower bound (%) |
+| Pool size | `--limit` | default 20, max 200 |
+
+All East Money requests go through the shared throttle (`_em_get`); for batch workloads set `EM_MIN_INTERVAL=1.5~2`.
+
+**Step 2: batch analysis** (run the full multi-agent graph per ticker, output a sorted summary)
+
+```bash
+tradingagents batch --pool pool.csv --limit 5 [--quick] [--trade-date 2026-08-12]
+# or pass tickers directly
+tradingagents batch --tickers 600519,000001 --limit 2
+```
+
+- **Cost gate**: prints the estimated LLM call count and asks for confirmation before running (≈17 calls per ticker full mode; 5 tickers ≈ 85)
+- `--quick` fast mode: only the 4 core analysts, ~30% fewer calls
+- **Failure isolation**: a failing ticker never aborts the batch; failures are listed separately with reasons
+- Every input passes through `safe_ticker_component` (Chinese names / invalid codes are resolved or rejected here)
+- Output: `reports/batch_{timestamp}/summary.md` — rating-sorted summary table (rating / execution advice / one-line thesis) plus each ticker's full report directory
+
+#### 6.4 K-line Charts (M5)
+
+The Web report page gains "📈 K线走势与预测": 120 historical candlesticks plus a forecast overlay (10 dashed candles).
+
+- The forecast **anchors to the execution advice target/stop** (Buy → target; Sell → stop; rating-coefficient fallback when no advice), with the intermediate path a reproducible random walk (fixed seed)
+- The forecast area is explicitly labelled "speculative" — research reference only, **not real market data**; the LLM never generates OHLC candles (hallucination-prone)
+- Data comes from the analysis-time OHLCV snapshot, so historical reports still render the chart
+
+---
 ## Web UI
 
 Built-in Streamlit visualization interface allows selecting LLM providers and models in the sidebar. Enter a stock code to perform one-click analysis, ideal for users who prefer not to write code.
@@ -281,7 +357,9 @@ Open your browser and navigate to `http://localhost:8501`.
 - **Model Selection**: Sidebar supports switching between 10 LLM providers (MiniMax/DeepSeek/Qwen/GLM/OpenAI/Anthropic/Google/xAI/OpenRouter/Ollama), plus **"OpenAI Compatible (custom base_url)"** for connecting to any OpenAI-compatible gateway (9Router / AI Router / self-hosted proxy)
 - **One-Click Analysis**: Enter a 6-digit A-share stock code + analysis date + "Data Start Date" (defaults to the first day of the current month, allows customizing the technical analysis lookback period, supports monthly/custom period analysis), then click "Start Analysis"
 - **Real-Time Progress**: 12-stage pipeline displayed in real-time (7 Analysts → Quality Gate → Debate → Risk Control → Decision), with expandable reports for all completed stages
-- **Complete Report**: Signal cards (Buy/Hold/Sell), 7 analyst reports, bull-bear debate, risk control assessment
+- **Complete Report**: Signal cards (Buy/Hold/Sell), 7 analyst reports, bull-bear debate, risk control assessment, **execution advice** (entry zone / stop-loss / target / position size, v0.6.0)
+- **Holdings Management** (v0.6.0): paste JSON in the "💼 Current Holdings (optional)" sidebar box; analysing a held ticker appends holding-action guidance (hold/add/reduce/exit)
+- **K-line Chart** (v0.6.0): report page shows historical K-line plus a forecast overlay (dashed "speculative" candles anchored to the execution advice target/stop)
 - **Report Export**: One-click download of **Markdown** (zero dependencies, always available) or **PDF** full analysis reports (PDF automatically adapts to Chinese fonts on Windows/macOS/Linux)
 - **History**: Automatically saves and displays all historical analyses
 
