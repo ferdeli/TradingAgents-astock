@@ -53,6 +53,19 @@ class TraderAction(str, Enum):
     SELL = "Sell"
 
 
+class PositionAction(str, Enum):
+    """Holding-management action for an existing position (M2).
+
+    Used by the Portfolio Manager when the analysis runs with a matching
+    holding: tells the user what to do with the position they already own.
+    """
+
+    HOLD = "hold"
+    ADD = "add"
+    REDUCE = "reduce"
+    EXIT = "exit"
+
+
 # ---------------------------------------------------------------------------
 # Research Manager
 # ---------------------------------------------------------------------------
@@ -163,6 +176,11 @@ class PortfolioDecision(BaseModel):
 
     Like :class:`TraderProposal`, this carries no price target and no other
     executable level — see that class for why.
+
+    When the analysis is run with a matching holding (``holdings`` in the
+    state/config), ``position_action`` and ``target_position_pct`` are also
+    filled so the decision doubles as holding-management guidance. Both stay
+    ``None`` for plain analyses, keeping the output backward compatible.
     """
 
     rating: PortfolioRating = Field(
@@ -189,6 +207,23 @@ class PortfolioDecision(BaseModel):
         default=None,
         description="Optional analysis horizon, e.g. '3-6 months'.",
     )
+    position_action: Optional[PositionAction] = Field(
+        default=None,
+        description=(
+            "Holding-management action for the current position, exactly one of "
+            "hold / add / reduce / exit. Set ONLY when a matching holding exists "
+            "in the context; otherwise leave None."
+        ),
+    )
+    target_position_pct: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=100.0,
+        description=(
+            "Target position size in percent of total capital after this action. "
+            "Set together with position_action; only when a holding exists."
+        ),
+    )
 
 
 def render_pm_decision(decision: PortfolioDecision) -> str:
@@ -197,7 +232,8 @@ def render_pm_decision(decision: PortfolioDecision) -> str:
     Memory log, CLI display, and saved report files all read this markdown,
     so the rendered output preserves the exact section headers (``**Rating**``,
     ``**Executive Summary**``, ``**Investment Thesis**``) that downstream
-    parsers and the report writers already handle.
+    parsers and the report writers already handle. ``**Position Action**`` /
+    ``**Target Position**`` are added only when a holding is present.
     """
     parts = [
         f"**Rating**: {decision.rating.value}",
@@ -208,6 +244,10 @@ def render_pm_decision(decision: PortfolioDecision) -> str:
     ]
     if decision.time_horizon:
         parts.extend(["", f"**Time Horizon**: {decision.time_horizon}"])
+    if decision.position_action is not None:
+        parts.extend(["", f"**Position Action**: {decision.position_action.value}"])
+        if decision.target_position_pct is not None:
+            parts.extend([f"**Target Position**: {decision.target_position_pct}%"])
     return "\n".join(parts)
 
 

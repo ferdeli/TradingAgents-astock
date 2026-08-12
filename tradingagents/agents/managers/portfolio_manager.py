@@ -29,6 +29,33 @@ _NO_LEVELS_RULE = (
 )
 
 
+def _holdings_block(holdings: list, price: float | None) -> str:
+    """Markdown block describing the current holding (research reference).
+
+    Returns ``""`` when there is no holding, so the plain-analysis behaviour
+    is byte-identical to before.
+    """
+    if not holdings:
+        return ""
+    h = holdings[0]  # create_initial_state filters to the matching one
+    quantity = h.get("quantity", 0)
+    cost = h.get("cost_price")
+    lines = ["\n**Current Position (research reference):**"]
+    if cost:
+        lines.append(f"- Cost price: {cost}, Quantity: {quantity}")
+        if price:
+            pnl_pct = (price - float(cost)) / float(cost) * 100
+            lines.append(f"- Latest close: {price:.2f} (PnL {pnl_pct:+.1f}%)")
+    else:
+        lines.append(f"- Quantity: {quantity} (cost price unknown)")
+    lines.append(
+        "- Output position_action (hold/add/reduce/exit) and target_position_pct "
+        "consistent with your rating; keep the position action in line with the "
+        "execution constraints above."
+    )
+    return "\n".join(lines)
+
+
 def create_portfolio_manager(llm):
     structured_llm = bind_structured(llm, PortfolioDecision, "Portfolio Manager")
 
@@ -46,6 +73,21 @@ def create_portfolio_manager(llm):
             if past_context
             else ""
         )
+
+        holdings = state.get("holdings", []) or []
+        price = None
+        if holdings:
+            # Reuse the Execution Advisor's snapshot helper for the current
+            # close, so the holding block can show realised PnL.
+            try:
+                from .execution_advisor import _fetch_price_snapshot
+                snapshot = _fetch_price_snapshot(
+                    state["company_of_interest"], state["trade_date"]
+                )
+                price = snapshot["price"] if snapshot else None
+            except Exception:  # noqa: BLE001 — holding block degrades gracefully
+                price = None
+        holding_block = _holdings_block(holdings, price)
 
         prompt = f"""As the Portfolio Manager, synthesize the risk analysts' debate and deliver the final trading decision.
 
@@ -83,7 +125,7 @@ def create_portfolio_manager(llm):
 **Context:**
 - Research Manager's investment plan: **{research_plan}**
 - Trader's transaction proposal: **{trader_plan}**
-{lessons_line}
+{lessons_line}{holding_block}
 **Risk Analysts Debate History:**
 {history}
 

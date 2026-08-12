@@ -79,4 +79,7 @@ class AgentState(MessagesState):
     execution_advice: Annotated[
         str, "Execution advice (entry/stop/target/position) from the Execution Advisor"
     ]
+    holdings: Annotated[
+        list, "Holdings matching the analysed ticker (code/name/quantity/cost_price)"
+    ]
     past_context: Annotated[str, "Memory log context injected at run start (same-ticker decisions + cross-ticker lessons)"]
