@@ -125,6 +125,7 @@ class GraphSetup:
         neutral_analyst = create_neutral_debator(self.llm_for("risk_neutral"))
         conservative_analyst = create_conservative_debator(self.llm_for("risk_conservative"))
         portfolio_manager_node = create_portfolio_manager(self.llm_for("portfolio_manager"))
+        execution_advisor_node = create_execution_advisor(self.llm_for("trader"))
 
         # Create workflow
         workflow = StateGraph(AgentState)
@@ -147,6 +148,7 @@ class GraphSetup:
         workflow.add_node("Neutral Analyst", neutral_analyst)
         workflow.add_node("Conservative Analyst", conservative_analyst)
         workflow.add_node("Portfolio Manager", portfolio_manager_node)
+        workflow.add_node("Execution Advisor", execution_advisor_node)
 
         # Define edges
         # Start with the first analyst
@@ -220,6 +222,7 @@ class GraphSetup:
             },
         )
 
-        workflow.add_edge("Portfolio Manager", END)
+        workflow.add_edge("Portfolio Manager", "Execution Advisor")
+        workflow.add_edge("Execution Advisor", END)
 
         return workflow
