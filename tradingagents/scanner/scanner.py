@@ -37,6 +37,7 @@ def parse_row(row: dict[str, Any]) -> dict[str, Any]:
         except (TypeError, ValueError):
             return None
 
+    raw_ind = row.get("f100")
     return {
         "code": str(row.get("f12", "")),
         "name": str(row.get("f14", "")),
@@ -44,7 +45,7 @@ def parse_row(row: dict[str, Any]) -> dict[str, Any]:
         "chg_pct": num("f3"),
         "mktcap": num("f20"),          # 元
         "pe": num("f9"),
-        "industry": str(row.get("f100", "") or ""),
+        "industry": "" if raw_ind in (None, "-", "") else str(raw_ind),
     }
 
 

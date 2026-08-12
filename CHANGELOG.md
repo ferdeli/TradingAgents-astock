@@ -6,6 +6,51 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Breaking changes within the 0.x line are called out explicitly.
 
+## [0.6.0] — 2026-08-12
+
+### 新增：执行建议（M1，Execution Advisor）
+
+Portfolio Manager 之后新增 `Execution Advisor` 节点：Buy/Overweight 评级下给出
+**买入区间 / 止损位 / 目标价 / 建议仓位**（研究参考，非投资建议）。仓位由确定性
+公式 `min(风险预算/止损距离, 20%)` 计算，LLM 不直出仓位；价位经
+`止损 < 现价 < 目标` 校验，非法即置 N/A。Hold/Sell 走占位，不消耗 LLM 调用。
+报告新增「VI. Execution Advice」章节，Web/PDF/Markdown 导出同步。
+
+### 新增：持仓管理（M2）
+
+`--holdings holdings.json`（CLI）/ Web 侧栏 JSON 输入当前持仓，按 code/name
+精确匹配注入分析；Portfolio Manager 输出 `position_action`
+（hold/add/reduce/exit）+ 目标仓位，报告显示持仓盈亏。无持仓时输出与旧版
+逐字节兼容。
+
+### 新增：筛选器（M3，`tradingagents scan`）
+
+纯数据层 scanner（零 LLM）：东财 clist 接口泛化出涨幅榜/市值榜，按
+行业 / PE 区间 / 市值下限 / 涨跌幅下限 AND 组合筛选全 A 股，默认排除 ST/退市，
+输出 `pool.csv` 供批量分析消费。所有请求走 `_em_get` 限流。
+
+### 新增：批量分析（M4，`tradingagents batch`）
+
+`--pool`（scan 输出）或 `--tickers` 列表 → 逐标的跑完整分析图 → 排序汇总表 +
+失败清单。每标的独立失败隔离、输入逐个过 `safe_ticker_component` 校验、
+`--quick` 快速模式（4 核心分析师）、执行前打印 LLM 调用量预估并确认。
+
+### 新增：K线呈现（M5）
+
+Web 报告页新增「K线走势与预测」：历史 120 根真实 K 线 + 预测区（锚定 M1 的
+目标/止损位，可复现随机游走，虚线/半透明区分并标注"示意"）。新增依赖
+`plotly>=6.0`。预测路径确定性生成，不使用 LLM 画 K 线。
+
+### 修复：东财 UA 补全
+
+`a_stock.py` 默认 UA 补成完整浏览器 UA（截断的 `AppleWebKit/537.36` 通过率低）。
+
+### 测试
+
+182 passed / 1 skipped / **0 failed**（新增 43 例；全量 unit 回归，45 subtests 通过）。
+
+---
+
 ## [0.5.14] — 2026-08-09
 
 ### 修复：连字符分隔符被当成构词，评级被静默丢弃

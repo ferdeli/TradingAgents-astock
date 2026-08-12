@@ -26,13 +26,13 @@ M3 是纯数据层、零 LLM、不依赖 M1/M2，可随时独立先行。
 
 ## 推荐实施顺序与预估
 
-| 顺序 | 里程碑 | 预估 | 核心交付 |
-|------|--------|------|----------|
-| 1 | M1 执行建议 | 1-2 天 | `ExecutionAdvice` schema + 新节点 + 报告章节 + 测试 |
-| 2 | M2 持仓管理 | 1-2 天 | `holdings` 输入 + 持仓感知 prompt + 持仓操作输出 |
-| 3 | M3 筛选器 | 1 天 | `tradingagents/scanner/` + clist 泛化 + 筛选 CLI |
-| 4 | M5 K线呈现 | 1-2 天 | `tradingagents/charting/` + plotly 依赖 + Web 组件 |
-| 5 | M4 批量分析 | 2-3 天 | `tradingagents scan` 子命令 + 批量编排 + 汇总报告 |
+| 顺序 | 里程碑 | 预估 | 核心交付 | 状态 |
+|------|--------|------|----------|------|
+| 1 | M1 执行建议 | 1-2 天 | `ExecutionAdvice` schema + 新节点 + 报告章节 + 测试 | ✅ 已合并入 main（PR #1） |
+| 2 | M2 持仓管理 | 1-2 天 | `holdings` 输入 + 持仓感知 prompt + 持仓操作输出 | ✅ 已实现（feature-m2-m5） |
+| 3 | M3 筛选器 | 1 天 | `tradingagents/scanner/` + clist 泛化 + 筛选 CLI | ✅ 已实现（feature-m2-m5） |
+| 4 | M5 K线呈现 | 1-2 天 | `tradingagents/charting/` + plotly 依赖 + Web 组件 | ✅ 已实现（feature-m2-m5） |
+| 5 | M4 批量分析 | 2-3 天 | `tradingagents scan` 子命令 + 批量编排 + 汇总报告 | ✅ 已实现（feature-m2-m5） |
 
 > M5 排在 M4 前：批量汇总页直接复用 M5 的 K 线组件；M5 的预测端点优先用 M1 的 `execution_advice`，M1 未上线时用评级系数回退（不阻塞）。
 
