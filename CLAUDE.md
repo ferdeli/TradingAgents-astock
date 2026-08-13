@@ -140,6 +140,7 @@ deepseek-v4-flash 等模型在 tool call 时可能返回中文股票名而非 6 
 模块默认空值，"还原"反而把用户真实配置抹成空。
 
 ## 开发规范
+- ⚠️ **功能分支一律基于 `main` 创建**（用户硬性要求）：`git checkout main && git pull origin main && git checkout -b <branch>`。**绝不从其他功能分支切出**——feature-m2-m5 曾因此被删除，导致基于它的 perf 分支基线漂移（教训：分支从 main 出发，合回 main，用完即删）
 - 开发计划文档统一存放于 `dev_plan/`（命名如 `dev_plan/plan-*.md`）
 - 改动前先跑 `python -m pytest tests/ -v` 确保不破坏现有测试
 - `safe_ticker_component` 是安全边界，任何绕过路径校验的改动必须慎重评估
