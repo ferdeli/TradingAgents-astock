@@ -79,6 +79,9 @@ class AgentState(MessagesState):
     execution_advice: Annotated[
         str, "Execution advice (entry/stop/target/position) from the Execution Advisor"
     ]
+    holding_advice: Annotated[
+        str, "Standalone holding-action advice (position/PnL/action) for immediate display"
+    ]
     holdings: Annotated[
         list, "Holdings matching the analysed ticker (code/name/quantity/cost_price)"
     ]

@@ -721,6 +721,7 @@ class TradingAgentsGraph:
             },
             "investment_plan": final_state["investment_plan"],
             "final_trade_decision": final_state["final_trade_decision"],
+            "execution_advice": final_state.get("execution_advice", ""),
         }
 
         # Save to file. Reject ticker values that would escape the

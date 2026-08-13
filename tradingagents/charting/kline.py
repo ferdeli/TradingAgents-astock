@@ -11,6 +11,9 @@ style them distinctly.
 
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 import re
 from typing import Any, Optional
 
@@ -32,6 +35,53 @@ _FALLBACK_ENDPOINT = {
 }
 _BUY_RATINGS = {"Buy", "Overweight"}
 _SELL_RATINGS = {"Underweight", "Sell"}
+
+
+# ---------------------------------------------------------------------------
+# Disk cache: {data_cache_dir}/kline/{ticker}_{trade_date}_{advice_hash}.json
+# ---------------------------------------------------------------------------
+
+
+def _kline_cache_dir() -> str:
+    """Cache directory for chart payloads (data_cache_dir/kline)."""
+    from tradingagents.dataflows.config import get_config
+
+    base = get_config().get("data_cache_dir") or os.path.expanduser("~/.tradingagents/cache")
+    path = os.path.join(base, "kline")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _cache_key(ticker: str, trade_date: str, advice_md: Optional[str]) -> str:
+    """Stable per-analysis cache key: ticker + date + advice signature.
+
+    The advice hash keeps two analyses of the same ticker/date with different
+    execution levels from sharing a forecast. History reports reuse the exact
+    advice they were generated with, so they always hit the cache.
+    """
+    sig = hashlib.md5((advice_md or "").encode("utf-8")).hexdigest()[:8]
+    safe_ticker = re.sub(r"[^A-Za-z0-9_.-]", "_", str(ticker))
+    return f"{safe_ticker}_{trade_date}_{sig}.json"
+
+
+def _load_disk_cache(ticker: str, trade_date: str, advice_md: Optional[str]) -> Optional[dict]:
+    path = os.path.join(_kline_cache_dir(), _cache_key(ticker, trade_date, advice_md))
+    if not os.path.exists(path):
+        return None
+    try:
+        return json.loads(open(path, encoding="utf-8").read())
+    except (OSError, ValueError):
+        return None
+
+
+def _save_disk_cache(ticker: str, trade_date: str, advice_md: Optional[str], chart: dict) -> None:
+    path = os.path.join(_kline_cache_dir(), _cache_key(ticker, trade_date, advice_md))
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(chart, fh, ensure_ascii=False)
+    except OSError:
+        pass  # cache write must never break charting
 
 
 # ---------------------------------------------------------------------------
@@ -153,11 +203,22 @@ def build_chart_data(
     rating: str = "Hold",
     forecast_days: int = DEFAULT_FORECAST_DAYS,
     ohlcv_text: Optional[str] = None,
+    use_disk_cache: bool = True,
 ) -> Optional[dict[str, Any]]:
     """Build the full chart payload ``{ticker, history, forecast, rating}``.
 
     Returns None when OHLCV cannot be loaded (UI shows a caption instead).
+
+    With ``use_disk_cache`` (default) the payload is cached per
+    ticker+date+advice on disk, so rendering a report — including reopening a
+    historical one — hits the cache instead of re-fetching OHLCV over the
+    network. ``ohlcv_text`` injection bypasses the cache entirely (tests).
     """
+    if use_disk_cache and ohlcv_text is None:
+        cached = _load_disk_cache(ticker, trade_date, advice_md)
+        if cached is not None:
+            return cached
+
     hist = load_ohlcv(ticker, trade_date, ohlcv_text)
     if hist is None:
         return None
@@ -172,9 +233,12 @@ def build_chart_data(
         for i, r in hist.iterrows()
     ]
     forecast = synthesize_forecast(hist, rating, advice, days=forecast_days)
-    return {
+    chart = {
         "ticker": ticker,
         "history": history,
         "forecast": forecast,
         "rating": rating,
     }
+    if use_disk_cache and ohlcv_text is None:
+        _save_disk_cache(ticker, trade_date, advice_md, chart)
+    return chart
