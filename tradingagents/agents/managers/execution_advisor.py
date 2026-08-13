@@ -117,6 +117,16 @@ def _placeholder(rating: str) -> str:
     return f"**Position Size**: 0%\n**Rationale**: {msg}"
 
 
+def _data_unavailable(reason: str) -> str:
+    """Placeholder for a Buy-level advice that cannot be produced safely.
+
+    Distinct from :func:`_placeholder` (which speaks for non-buy ratings):
+    this says "no data / could not validate", never a contradictory rating
+    message.
+    """
+    return f"**Position Size**: 0%\n**Rationale**: {reason}"
+
+
 def create_execution_advisor(llm):
     """Create the Execution Advisor graph node.
 
@@ -139,7 +149,11 @@ def create_execution_advisor(llm):
         snapshot = _fetch_price_snapshot(ticker, trade_date)
         price = snapshot["price"] if snapshot else None
         if price is None:
-            return {"execution_advice": _placeholder("Buy")}
+            return {
+                "execution_advice": _data_unavailable(
+                    "无法获取有效行情快照（mootdx/新浪均不可用），暂不给出执行建议。"
+                )
+            }
 
         if snapshot["atr"] <= 0:
             atr_line = "n/a"
@@ -186,6 +200,15 @@ Guidance:
             render_validated,
             "Execution Advisor",
         )
+        # The free-text fallback path (provider without structured output, or
+        # a failed structured call) returns raw response.content that bypassed
+        # validate_advice and the deterministic position-size overwrite.
+        # Never publish unvalidated levels: detect the structured-render header
+        # and replace anything else with a data-unavailable note.
+        if not rendered.strip().startswith("**Entry Zone**"):
+            rendered = _data_unavailable(
+                "执行建议生成已降级为自由文本，未经价位校验，不发布具体价位/仓位。"
+            )
         return {"execution_advice": rendered}
 
     return execution_advisor_node

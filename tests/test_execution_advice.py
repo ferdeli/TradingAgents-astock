@@ -1,8 +1,9 @@
 """Unit tests for the Execution Advisor node.
 
 Covers the price-snapshot derivation (mock vendor CSV), the non-buy
-placeholder path (no LLM call), and the buy path where the LLM proposes
-price levels that are validated and sized deterministically.
+placeholder path (no LLM call), the buy path where the LLM proposes
+price levels that are validated and sized deterministically, the P1
+free-text-fallback safety gate, and the P2b state-log serialization.
 """
 
 from unittest.mock import MagicMock
@@ -119,4 +120,100 @@ class TestExecutionAdvisorNode:
         node = ea.create_execution_advisor(llm)
         out = node(_state())
         assert "Position Size**: 0%" in out["execution_advice"]
+        assert "离场" not in out["execution_advice"]          # 不与 Buy 评级矛盾
+        assert "行情快照" in out["execution_advice"]           # 数据不可用语义
         llm.invoke.assert_not_called()
+
+    def test_buy_freetext_fallback_not_published(self, monkeypatch):
+        # P1: provider without structured output → plain_llm.invoke returns raw
+        # text that bypassed validate_advice; must NOT be published as advice.
+        monkeypatch.setattr(ea, "route_to_vendor", lambda *a, **k: OHLCV_CSV)
+        llm = MagicMock()
+        # with_structured_output unsupported → bind_structured returns None
+        llm.with_structured_output.side_effect = NotImplementedError
+        llm.invoke.return_value = MagicMock(
+            content="entry 9.5, stop 12.0, target 8.0, position 88%"  # unvalidated junk
+        )
+        node = ea.create_execution_advisor(llm)
+        out = node(_state())
+        text = out["execution_advice"]
+        assert "Position Size**: 0%" in text
+        assert "降级" in text                                    # explicit degradation note
+        assert "9.5" not in text and "88%" not in text           # no unvalidated levels
+
+    def test_buy_freetext_fallback_after_structured_failure(self, monkeypatch):
+        # P1: structured call raises → invoke_structured_or_freetext falls back
+        # to plain text; the unvalidated text must be replaced too.
+        monkeypatch.setattr(ea, "route_to_vendor", lambda *a, **k: OHLCV_CSV)
+        llm = MagicMock()
+        structured = MagicMock()
+        structured.invoke.side_effect = RuntimeError("malformed json")
+        llm.with_structured_output.return_value = structured
+        llm.invoke.return_value = MagicMock(content="随便写的价位 100 元")
+        node = ea.create_execution_advisor(llm)
+        out = node(_state())
+        assert "降级" in out["execution_advice"]
+        assert "100" not in out["execution_advice"]
+
+
+@pytest.mark.unit
+class TestStateLogSerialization:
+    """P2b: execution_advice must survive into the saved history JSON."""
+
+    def _minimal_state(self):
+        return {
+            "company_of_interest": "600519",
+            "trade_date": "2026-08-06",
+            "market_report": "m", "sentiment_report": "s", "news_report": "n",
+            "fundamentals_report": "f", "policy_report": "p",
+            "hot_money_report": "h", "lockup_report": "l",
+            "investment_debate_state": {
+                "bull_history": "b", "bear_history": "r", "history": "h",
+                "current_response": "c", "judge_decision": "j",
+            },
+            "trader_investment_plan": "trader",
+            "risk_debate_state": {
+                "aggressive_history": "a", "conservative_history": "c",
+                "neutral_history": "n", "history": "h", "judge_decision": "j",
+            },
+            "investment_plan": "plan",
+            "final_trade_decision": "**Rating**: Buy\n\n**Executive Summary**: ok",
+            "execution_advice": "**Position Size**: 15.0%\n**Rationale**: test",
+        }
+
+    def test_log_state_contains_execution_advice(self, tmp_path):
+        import json
+
+        from tradingagents.graph.trading_graph import TradingAgentsGraph
+
+        graph = object.__new__(TradingAgentsGraph)
+        graph.ticker = "600519"
+        graph.config = {"results_dir": str(tmp_path)}
+        graph.log_states_dict = {}
+
+        graph._log_state("2026-08-06", self._minimal_state())
+
+        log_file = next((tmp_path / "600519" / "TradingAgentsStrategy_logs").glob("full_states_log_*.json"))
+        payload = json.loads(log_file.read_text(encoding="utf-8"))
+        assert payload["execution_advice"] == (
+            "**Position Size**: 15.0%\n**Rationale**: test"
+        )
+        assert payload["final_trade_decision"].startswith("**Rating**: Buy")
+
+    def test_missing_execution_advice_degrades_to_empty(self, tmp_path):
+        import json
+
+        from tradingagents.graph.trading_graph import TradingAgentsGraph
+
+        state = self._minimal_state()
+        state.pop("execution_advice")
+
+        graph = object.__new__(TradingAgentsGraph)
+        graph.ticker = "600519"
+        graph.config = {"results_dir": str(tmp_path)}
+        graph.log_states_dict = {}
+
+        graph._log_state("2026-08-06", state)
+        log_file = next((tmp_path / "600519" / "TradingAgentsStrategy_logs").glob("full_states_log_*.json"))
+        payload = json.loads(log_file.read_text(encoding="utf-8"))
+        assert payload["execution_advice"] == ""
