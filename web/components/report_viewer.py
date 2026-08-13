@@ -174,6 +174,13 @@ def render_report(
         st.markdown(_display_report_text(exec_advice, ticker, final_state))
         st.markdown("---")
 
+    # M2: standalone holding-action advice — shown immediately after analysis
+    holding_advice = final_state.get("holding_advice", "")
+    if holding_advice:
+        st.markdown("### 💼 持仓操作建议")
+        st.markdown(_display_report_text(holding_advice, ticker, final_state))
+        st.markdown("---")
+
     # M5: K-line + forecast (best-effort — never crashes the report page)
     try:
         from tradingagents.charting.kline import build_chart_data

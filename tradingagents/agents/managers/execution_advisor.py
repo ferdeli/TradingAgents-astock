@@ -18,6 +18,7 @@ and education, not an investment-advisory signal.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Optional
 
 import pandas as pd
@@ -127,12 +128,82 @@ def _data_unavailable(reason: str) -> str:
     return f"**Position Size**: 0%\n**Rationale**: {reason}"
 
 
+# ---------------------------------------------------------------------------
+# Holding advice (M2): a standalone "what to do with my position" block.
+# ---------------------------------------------------------------------------
+
+_ACTION_CN = {
+    "hold": "持有",
+    "add": "加仓",
+    "reduce": "减仓",
+    "exit": "清仓/离场",
+}
+
+
+def parse_position_advice(decision_md: str) -> tuple[Optional[str], Optional[float]]:
+    """Extract (position_action, target_position_pct) from the PM decision markdown.
+
+    Returns ``(None, None)`` when the PM produced no holding guidance.
+    """
+    action: Optional[str] = None
+    target: Optional[float] = None
+    for line in (decision_md or "").splitlines():
+        if line.startswith("**Position Action**"):
+            action = line.split("**", 2)[-1].strip().lstrip(":").strip().lower()
+        elif line.startswith("**Target Position**"):
+            m = re.search(r"(\d+\.?\d*)", line.split("**", 2)[-1])
+            if m:
+                target = float(m.group(1))
+    return action, target
+
+
+def build_holding_advice(
+    holdings: list, snapshot: Optional[dict], decision_md: str
+) -> str:
+    """Render a standalone holding-action block for immediate display.
+
+    Combines the user's position (cost/quantity/PnL) with the PM's
+    position_action / target_position_pct. ``holdings`` is already filtered to
+    the analysed ticker by ``Propagator.create_initial_state``.
+    """
+    if not holdings:
+        return ""
+    h = holdings[0]
+    quantity = h.get("quantity", 0)
+    cost = h.get("cost_price")
+
+    lines = ["**当前持仓（研究参考）**", ""]
+    if cost:
+        lines.append(f"- 持仓成本：{cost}，数量：{quantity}")
+        price = snapshot["price"] if snapshot else None
+        if price:
+            pnl = (price - float(cost)) / float(cost) * 100
+            lines.append(f"- 现价：{price:.2f}，浮动盈亏：{pnl:+.1f}%")
+    else:
+        lines.append(f"- 数量：{quantity}（成本未知）")
+
+    action, target = parse_position_advice(decision_md)
+    if action:
+        cn = _ACTION_CN.get(action, action)
+        target_txt = f"，目标仓位 {target}%" if target is not None else ""
+        lines.append(f"- **建议操作：{cn}**{target_txt}")
+    else:
+        lines.append("- 建议操作：维持现状（本次决策未给出明确加减仓信号）")
+    lines.append("- ⚠️ 研究参考，非自动调仓指令")
+    return "\n".join(lines)
+
+
 def create_execution_advisor(llm):
     """Create the Execution Advisor graph node.
 
     ``llm`` is the same quick-thinking model used by the Trader; structured
     output is bound when the provider supports it, with free-text fallback
     otherwise (identical to the Portfolio Manager pattern).
+
+    Besides ``execution_advice``, the node also emits ``holding_advice`` — a
+    standalone position-action block (M2) built from the user's holding and
+    the PM's decision, so the CLI/Web can surface it immediately after the
+    analysis finishes.
     """
     structured_llm = bind_structured(llm, ExecutionAdvice, "Execution Advisor")
 
@@ -142,25 +213,28 @@ def create_execution_advisor(llm):
         rating = parse_rating(state.get("final_trade_decision", ""))
         instrument_context = build_instrument_context(ticker)
 
+        holdings = state.get("holdings", []) or []
+        # Snapshot is needed for holding PnL (holdings present) and for the
+        # buy path's price levels; fetch once, reuse both.
+        need_snapshot = bool(holdings) or rating in _BUY_RATINGS
+        snapshot = _fetch_price_snapshot(ticker, trade_date) if need_snapshot else None
+
         # Non-buy ratings: no LLM call, deterministic placeholder.
         if rating not in _BUY_RATINGS:
-            return {"execution_advice": _placeholder(rating)}
-
-        snapshot = _fetch_price_snapshot(ticker, trade_date)
-        price = snapshot["price"] if snapshot else None
-        if price is None:
-            return {
-                "execution_advice": _data_unavailable(
+            advice = _placeholder(rating)
+        else:
+            price = snapshot["price"] if snapshot else None
+            if price is None:
+                advice = _data_unavailable(
                     "无法获取有效行情快照（mootdx/新浪均不可用），暂不给出执行建议。"
                 )
-            }
+            else:
+                if snapshot["atr"] <= 0:
+                    atr_line = "n/a"
+                else:
+                    atr_line = f"{snapshot['atr']:.2f}"
 
-        if snapshot["atr"] <= 0:
-            atr_line = "n/a"
-        else:
-            atr_line = f"{snapshot['atr']:.2f}"
-
-        prompt = f"""As the Execution Advisor, translate the final decision into concrete research-reference execution levels.
+                prompt = f"""As the Execution Advisor, translate the final decision into concrete research-reference execution levels.
 
 {instrument_context}
 
@@ -187,28 +261,38 @@ Guidance:
 - Do NOT propose position_size_pct; it is computed by a deterministic rule.
 {_REFERENCE_DISCLAIMER}{get_language_instruction()}"""
 
-        # Validate + derive position size BEFORE rendering; free-text fallback
-        # (no structured output) passes the raw model text through unchanged,
-        # mirroring the Portfolio Manager's degradation behaviour.
-        def render_validated(advice: ExecutionAdvice) -> str:
-            return render_execution_advice(validate_advice(advice, price))
+                # Validate + derive position size BEFORE rendering; free-text
+                # fallback (no structured output) passes the raw model text
+                # through unchanged, mirroring the PM's degradation behaviour.
+                def render_validated(advice: ExecutionAdvice) -> str:
+                    return render_execution_advice(validate_advice(advice, price))
 
-        rendered = invoke_structured_or_freetext(
-            structured_llm,
-            llm,
-            prompt,
-            render_validated,
-            "Execution Advisor",
-        )
-        # The free-text fallback path (provider without structured output, or
-        # a failed structured call) returns raw response.content that bypassed
-        # validate_advice and the deterministic position-size overwrite.
-        # Never publish unvalidated levels: detect the structured-render header
-        # and replace anything else with a data-unavailable note.
-        if not rendered.strip().startswith("**Entry Zone**"):
-            rendered = _data_unavailable(
-                "执行建议生成已降级为自由文本，未经价位校验，不发布具体价位/仓位。"
+                rendered = invoke_structured_or_freetext(
+                    structured_llm,
+                    llm,
+                    prompt,
+                    render_validated,
+                    "Execution Advisor",
+                )
+                # The free-text fallback path (provider without structured
+                # output, or a failed structured call) returns raw
+                # response.content that bypassed validate_advice and the
+                # deterministic position-size overwrite. Never publish
+                # unvalidated levels: detect the structured-render header and
+                # replace anything else with a data-unavailable note.
+                if not rendered.strip().startswith("**Entry Zone**"):
+                    rendered = _data_unavailable(
+                        "执行建议生成已降级为自由文本，未经价位校验，不发布具体价位/仓位。"
+                    )
+                advice = rendered
+
+        result = {"execution_advice": advice}
+        if holdings:
+            result["holding_advice"] = build_holding_advice(
+                holdings,
+                snapshot,
+                state.get("final_trade_decision", ""),
             )
-        return {"execution_advice": rendered}
+        return result
 
     return execution_advisor_node

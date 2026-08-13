@@ -217,3 +217,77 @@ class TestStateLogSerialization:
         log_file = next((tmp_path / "600519" / "TradingAgentsStrategy_logs").glob("full_states_log_*.json"))
         payload = json.loads(log_file.read_text(encoding="utf-8"))
         assert payload["execution_advice"] == ""
+
+
+@pytest.mark.unit
+class TestHoldingAdvice:
+    """M2 enhancement: standalone position-action block."""
+
+    DECISION_WITH_ACTION = (
+        "**Rating**: Buy\n\n**Executive Summary**: ok\n"
+        "**Position Action**: add\n**Target Position**: 15.0%"
+    )
+
+    def test_parse_position_advice(self):
+        action, target = ea.parse_position_advice(self.DECISION_WITH_ACTION)
+        assert action == "add" and target == 15.0
+
+    def test_parse_no_action(self):
+        assert ea.parse_position_advice("**Rating**: Hold") == (None, None)
+
+    def test_build_holding_advice(self):
+        md = ea.build_holding_advice(
+            [{"code": "600519", "quantity": 100, "cost_price": 1400.0}],
+            {"price": 1540.0},
+            self.DECISION_WITH_ACTION,
+        )
+        assert "持仓成本：1400.0" in md
+        assert "浮动盈亏：+10.0%" in md
+        assert "**建议操作：加仓**" in md
+        assert "目标仓位 15.0%" in md
+
+    def test_build_holding_advice_no_action(self):
+        md = ea.build_holding_advice(
+            [{"code": "600519", "quantity": 100, "cost_price": 1400.0}],
+            None,
+            "**Rating**: Hold",
+        )
+        assert "建议操作：维持现状" in md
+        assert "盈亏" not in md                      # no snapshot → no PnL
+
+    def test_build_holding_advice_empty_holdings(self):
+        assert ea.build_holding_advice([], None, "") == ""
+
+
+@pytest.mark.unit
+class TestNodeHoldingAdviceEmission:
+    def _state_with_holding(self, rating_text="**Rating**: Buy"):
+        s = _state(rating_text)
+        s["holdings"] = [{"code": "600519", "quantity": 100, "cost_price": 1400.0}]
+        return s
+
+    def test_holding_advice_emitted_for_buy(self, monkeypatch):
+        monkeypatch.setattr(ea, "route_to_vendor", lambda *a, **k: OHLCV_CSV)
+        llm = MagicMock()
+        structured = MagicMock()
+        structured.invoke.return_value = ExecutionAdvice(
+            entry_zone="9.8 - 10.2", stop_loss=9.0, target_price=11.5, rationale="ok"
+        )
+        llm.with_structured_output.return_value = structured
+        node = ea.create_execution_advisor(llm)
+        out = node(self._state_with_holding())
+        assert "holding_advice" in out
+        assert "持仓成本：1400.0" in out["holding_advice"]
+
+    def test_holding_advice_emitted_for_hold(self, monkeypatch):
+        monkeypatch.setattr(ea, "route_to_vendor", lambda *a, **k: OHLCV_CSV)
+        node = ea.create_execution_advisor(MagicMock())
+        out = node(self._state_with_holding("**Rating**: Hold"))
+        assert "holding_advice" in out
+        assert "维持现状" in out["holding_advice"] or "建议操作" in out["holding_advice"]
+
+    def test_no_holdings_no_holding_advice_key(self, monkeypatch):
+        monkeypatch.setattr(ea, "route_to_vendor", lambda *a, **k: OHLCV_CSV)
+        node = ea.create_execution_advisor(MagicMock())
+        out = node(_state("**Rating**: Sell"))
+        assert "holding_advice" not in out

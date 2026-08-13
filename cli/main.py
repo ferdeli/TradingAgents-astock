@@ -530,6 +530,16 @@ def get_user_selections():
     )
     market_lookback_days = get_market_lookback_days(analysis_date)
 
+    # Step 2c: holdings (optional) — interactive cost/quantity input
+    console.print(
+        create_question_box(
+            "Step 2c: Holdings (Optional)",
+            "持仓成本价（直接回车跳过 = 本次分析不携带持仓）；数量下一步输入",
+            "",
+        )
+    )
+    holdings = ask_holdings(selected_ticker)
+
     # Step 3: Output language
     console.print(
         create_question_box(
@@ -620,7 +630,31 @@ def get_user_selections():
         "openai_reasoning_effort": reasoning_effort,
         "anthropic_effort": anthropic_effort,
         "output_language": output_language,
+        "holdings": holdings,
     }
+
+
+def ask_holdings(ticker: str) -> list:
+    """Interactively collect an optional holding for the analysed ticker.
+
+    Returns ``[]`` when the user skips (empty cost price). A holding is
+    ``{"code": ticker, "quantity": int, "cost_price": float}`` — the analysis
+    then appends a standalone holding-action advice right after finishing.
+    """
+    cost_raw = typer.prompt("持仓成本价（回车跳过）", default="").strip()
+    if not cost_raw:
+        return []
+    try:
+        cost = float(cost_raw)
+    except ValueError:
+        console.print("[yellow]成本价无效，已按无持仓处理[/yellow]")
+        return []
+    qty_raw = typer.prompt("持仓数量（股）", default="0").strip()
+    try:
+        qty = int(float(qty_raw))
+    except ValueError:
+        qty = 0
+    return [{"code": ticker, "quantity": qty, "cost_price": cost}]
 
 
 def get_ticker():
@@ -773,6 +807,13 @@ def save_report_to_disk(final_state, ticker: str, save_path: Path):
         (advisor_dir / "advice.md").write_text(final_state["execution_advice"], encoding="utf-8")
         sections.append(f"## VI. Execution Advice\n\n### Execution Advisor\n{final_state['execution_advice']}")
 
+    # 7. Holding advice (M2) — standalone, immediate
+    if final_state.get("holding_advice"):
+        advisor_dir = save_path / "6_execution"
+        advisor_dir.mkdir(exist_ok=True)
+        (advisor_dir / "holding.md").write_text(final_state["holding_advice"], encoding="utf-8")
+        sections.append(f"## VII. Holding Advice\n\n{final_state['holding_advice']}")
+
     # Write consolidated report
     header = f"# Trading Analysis Report: {ticker}\n\nGenerated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n> ⚠️ 免责声明：本报告由 AI 自动生成，仅供学习研究与技术演示，不构成任何投资建议。投资有风险，决策请咨询持牌专业机构。\n\n"
     (save_path / "complete_report.md").write_text(header + "\n\n".join(sections), encoding="utf-8")
@@ -840,6 +881,16 @@ def display_complete_report(final_state):
         if risk.get("judge_decision"):
             console.print(Panel("[bold]V. Portfolio Manager Decision[/bold]", border_style="green"))
             console.print(Panel(Markdown(risk["judge_decision"]), title="Portfolio Manager", border_style="blue", padding=(1, 2)))
+
+    # VI. Execution Advice
+    if final_state.get("execution_advice"):
+        console.print(Panel("[bold]VI. Execution Advice[/bold]", border_style="cyan"))
+        console.print(Panel(Markdown(final_state["execution_advice"]), title="Execution Advisor", border_style="blue", padding=(1, 2)))
+
+    # VII. Holding Advice — immediate, standalone position action (M2)
+    if final_state.get("holding_advice"):
+        console.print(Panel("[bold]VII. 持仓操作建议[/bold]", border_style="yellow"))
+        console.print(Panel(Markdown(final_state["holding_advice"]), border_style="yellow", padding=(1, 2)))
 
 
 def update_research_team_status(status):
@@ -1018,7 +1069,10 @@ def run_analysis(checkpoint: bool = False, holdings: Optional[Path] = None):
     config["deep_think_llm"] = selections["deep_thinker"]
     config["backend_url"] = selections["backend_url"]
     config["llm_provider"] = selections["llm_provider"].lower()
-    if holdings is not None:
+    # Interactive holdings (Step 2c) take precedence over the --holdings file.
+    if selections.get("holdings"):
+        config["holdings"] = selections["holdings"]
+    elif holdings is not None:
         config["holdings"] = _load_holdings(holdings)
     # Provider-specific thinking configuration
     config["google_thinking_level"] = selections.get("google_thinking_level")
