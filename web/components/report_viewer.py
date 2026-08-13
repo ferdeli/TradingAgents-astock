@@ -179,11 +179,21 @@ def render_report(
         from tradingagents.charting.kline import build_chart_data
         from web.components.kline_viewer import render_kline
 
+        # Session-level in-memory cache on top of the disk cache: within one
+        # Streamlit session the same ticker/date/advice renders instantly and
+        # reruns never re-fetch OHLCV over the network.
+        @st.cache_data(show_spinner=False, max_entries=64)
+        def _kline_chart(ticker: str, trade_date: str, advice_md: str, rating: str):
+            return build_chart_data(
+                ticker, trade_date, advice_md=advice_md, rating=rating
+            )
+
         st.markdown("### 📈 K线走势与预测")
-        chart = build_chart_data(
-            ticker, trade_date,
-            advice_md=exec_advice,
-            rating=final_state.get("final_trade_decision", ""),
+        chart = _kline_chart(
+            ticker,
+            trade_date,
+            exec_advice,
+            final_state.get("final_trade_decision", ""),
         )
         if chart is not None:
             render_kline(st, chart)

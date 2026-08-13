@@ -100,6 +100,45 @@ class TestBuildChartData:
 
 
 @pytest.mark.unit
+class TestDiskCache:
+    def _chart(self, monkeypatch, tmp_path, calls, advice_md=ADVICE_MD):
+        """First build fetches (route_to_vendor), later calls hit the disk cache."""
+        cache_dir = tmp_path / "kline"
+        monkeypatch.setattr(kline, "_kline_cache_dir", lambda: str(cache_dir))
+
+        def fake_vendor(*a, **k):
+            calls.append(1)
+            return CSV
+
+        monkeypatch.setattr(kline, "route_to_vendor", fake_vendor)
+        return kline.build_chart_data(
+            "600519", "2026-07-05", advice_md=advice_md, rating="Buy"
+        )
+
+    def test_second_call_hits_cache_no_network(self, monkeypatch, tmp_path):
+        calls: list = []
+        first = self._chart(monkeypatch, tmp_path, calls)
+        second = self._chart(monkeypatch, tmp_path, calls)
+        assert calls == [1]                      # only the first call fetched
+        assert first == second                   # byte-identical payload
+        assert len(second["history"]) == 5
+
+    def test_different_advice_gets_different_cache(self, monkeypatch, tmp_path):
+        calls: list = []
+        self._chart(monkeypatch, tmp_path, calls, advice_md=ADVICE_MD)
+        self._chart(monkeypatch, tmp_path, calls, advice_md=PLACEHOLDER_MD)
+        assert calls == [1, 1]                   # different advice → re-fetch
+
+    def test_ohlcv_text_injection_bypasses_cache(self, monkeypatch, tmp_path):
+        # Injected text never calls the vendor and never writes a cache file.
+        monkeypatch.setattr(kline, "_kline_cache_dir", lambda: str(tmp_path / "kline"))
+        monkeypatch.setattr(kline, "route_to_vendor", lambda *a, **k: pytest.fail("vendor called"))
+        kline.build_chart_data("600519", "2026-07-05", advice_md=ADVICE_MD, rating="Buy",
+                               ohlcv_text=CSV)
+        assert not (tmp_path / "kline").exists() or not list((tmp_path / "kline").iterdir())
+
+
+@pytest.mark.unit
 class TestFigure:
     def test_two_traces_with_forecast(self):
         chart = kline.build_chart_data(
