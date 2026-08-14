@@ -83,6 +83,7 @@ class AgentState(MessagesState):
         str, "Standalone holding-action advice (position/PnL/action) for immediate display"
     ]
     holdings: Annotated[
-        list, "Holdings matching the analysed ticker (code/name/quantity/cost_price)"
+        Optional[dict],
+        "Current holding of the analysed ticker: {quantity, cost_price} or None",
     ]
     past_context: Annotated[str, "Memory log context injected at run start (same-ticker decisions + cross-ticker lessons)"]

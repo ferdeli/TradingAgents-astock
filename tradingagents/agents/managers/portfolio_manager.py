@@ -29,17 +29,17 @@ _NO_LEVELS_RULE = (
 )
 
 
-def _holdings_block(holdings: list, price: float | None) -> str:
+def _holdings_block(holding: Optional[dict], price: float | None) -> str:
     """Markdown block describing the current holding (research reference).
 
-    Returns ``""`` when there is no holding, so the plain-analysis behaviour
-    is byte-identical to before.
+    ``holding`` is a single ``{"quantity", "cost_price"}`` dict (the analysed
+    ticker itself). Returns ``""`` when there is no holding, so the plain
+    analysis behaviour is byte-identical to before.
     """
-    if not holdings:
+    if not holding:
         return ""
-    h = holdings[0]  # create_initial_state filters to the matching one
-    quantity = h.get("quantity", 0)
-    cost = h.get("cost_price")
+    quantity = holding.get("quantity", 0)
+    cost = holding.get("cost_price")
     lines = ["\n**Current Position (research reference):**"]
     if cost:
         lines.append(f"- Cost price: {cost}, Quantity: {quantity}")
@@ -74,9 +74,9 @@ def create_portfolio_manager(llm):
             else ""
         )
 
-        holdings = state.get("holdings", []) or []
+        holding = state.get("holdings")  # single {"quantity", "cost_price"} or None
         price = None
-        if holdings:
+        if holding:
             # Reuse the Execution Advisor's snapshot helper for the current
             # close, so the holding block can show realised PnL.
             try:
@@ -87,7 +87,7 @@ def create_portfolio_manager(llm):
                 price = snapshot["price"] if snapshot else None
             except Exception:  # noqa: BLE001 — holding block degrades gracefully
                 price = None
-        holding_block = _holdings_block(holdings, price)
+        holding_block = _holdings_block(holding, price)
 
         prompt = f"""As the Portfolio Manager, synthesize the risk analysts' debate and deliver the final trading decision.
 

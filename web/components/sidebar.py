@@ -294,12 +294,13 @@ def render_sidebar() -> None:
         _render_llm_config()
 
     with st.expander("💼 当前持仓（可选）", expanded=False):
-        st.text_area(
-            "持仓 JSON",
-            key="holdings_json",
-            placeholder='[{"code": "600519", "name": "贵州茅台", "quantity": 100, "cost_price": 1400.0}]',
-            help="输入后分析持仓标的时，决策会附带持仓操作建议（持有/加仓/减仓/清仓）。JSON 非法则忽略。",
-            height=110,
+        st.number_input(
+            "持仓均价", min_value=0.0, step=0.01, value=0.0, key="holding_cost_price",
+            help="当前分析标的的持仓均价（成本）。留 0 = 无持仓，不生成持仓操作建议。",
+        )
+        st.number_input(
+            "持仓总量（股）", min_value=0, step=100, value=0, key="holding_quantity",
+            help="当前分析标的的持仓总量。",
         )
 
     tracker = st.session_state.get("tracker")

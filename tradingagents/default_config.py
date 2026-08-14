@@ -95,8 +95,10 @@ DEFAULT_CONFIG = {
     "tool_vendors": {
         # Example: "get_stock_data": "alpha_vantage",  # Override category default
     },
-    # Current holdings (M2). Each entry: {"code", "name", "quantity", "cost_price"}.
-    # When a holding matches the analysed ticker, the Portfolio Manager also
-    # outputs position_action / target_position_pct. Empty list = plain analysis.
-    "holdings": [],
+    # Current holdings (M2, simplified). A single object for the ticker being
+    # analysed — no code/name (the analysed ticker IS the holding):
+    #   "holdings": {"quantity": 100, "cost_price": 1400.0}
+    # Legacy list format [{code, name, quantity, cost_price}] is still accepted
+    # (first entry wins). Absent/empty = plain analysis.
+    "holdings": None,
 }

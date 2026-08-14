@@ -1,7 +1,9 @@
-"""Unit tests for M2 holding-management support.
+"""Unit tests for M2 holding-management support (simplified structure).
 
-Covers: holding matching, the PM prompt block (incl. PnL), the backward
-compatibility of the rendered decision (no holding → byte-compatible), and
+The holding is now a single ``{"quantity", "cost_price"}`` dict for the
+analysed ticker (no code/name, not an array); the legacy list shape is still
+accepted via ``_normalize_holdings``. Covers: normalisation, the PM prompt
+block (incl. PnL), the backward compatibility of the rendered decision, and
 the initial-state injection.
 """
 
@@ -14,47 +16,49 @@ from tradingagents.agents.schemas import (
     PositionAction,
     render_pm_decision,
 )
-from tradingagents.graph.propagation import Propagator, _holding_matches
+from tradingagents.graph.propagation import Propagator, _normalize_holdings
 
 
 @pytest.mark.unit
-class TestHoldingMatch:
-    def test_match_by_code(self):
-        assert _holding_matches({"code": "600519", "name": "贵州茅台"}, "600519")
-        assert _holding_matches({"code": "600519"}, "sh600519")
-        assert _holding_matches({"code": "600519.SH"}, "600519")
+class TestNormalizeHoldings:
+    def test_new_simple_dict(self):
+        assert _normalize_holdings({"quantity": 100, "cost_price": 1400.0}) == {
+            "quantity": 100, "cost_price": 1400.0,
+        }
 
-    def test_match_by_name(self):
-        assert _holding_matches({"code": "600519", "name": "贵州茅台"}, "贵州茅台")
+    def test_legacy_list_first_entry_wins(self):
+        out = _normalize_holdings([
+            {"code": "600519", "name": "贵州茅台", "quantity": 100, "cost_price": 1400.0},
+            {"code": "000001", "name": "平安银行", "quantity": 500, "cost_price": 10.0},
+        ])
+        assert out == {"quantity": 100, "cost_price": 1400.0}
 
-    def test_no_match(self):
-        assert not _holding_matches({"code": "000001", "name": "平安银行"}, "600519")
-        assert not _holding_matches({"code": "600519"}, "000001")
+    def test_empty_and_absent_are_none(self):
+        assert _normalize_holdings(None) is None
+        assert _normalize_holdings([]) is None
+        assert _normalize_holdings({}) is None
 
-    def test_fuzzy_names_do_not_match(self):
-        # Partial name matches must not leak into the prompt.
-        assert not _holding_matches({"code": "600519", "name": "贵州茅台"}, "贵州")
+    def test_code_and_name_are_ignored(self):
+        # 新结构：code/name 冗余，不再参与匹配
+        out = _normalize_holdings({"quantity": 200, "cost_price": 12.5})
+        assert "code" not in out and "name" not in out
 
 
 @pytest.mark.unit
 class TestHoldingsBlock:
-    def test_empty_returns_empty(self):
-        assert _holdings_block([], None) == ""
+    def test_none_returns_empty(self):
+        assert _holdings_block(None, None) == ""
 
     def test_with_cost_and_price_shows_pnl(self):
         block = _holdings_block(
-            [{"code": "600519", "name": "贵州茅台", "quantity": 100, "cost_price": 1400.0}],
-            price=1540.0,
+            {"quantity": 100, "cost_price": 1400.0}, price=1540.0
         )
         assert "Cost price: 1400.0" in block
         assert "PnL +10.0%" in block
         assert "position_action" in block
 
     def test_cost_without_price_degrades(self):
-        block = _holdings_block(
-            [{"code": "600519", "name": "贵州茅台", "quantity": 100, "cost_price": 1400.0}],
-            price=None,
-        )
+        block = _holdings_block({"quantity": 100, "cost_price": 1400.0}, price=None)
         assert "Cost price: 1400.0" in block
         assert "PnL" not in block
 
@@ -93,22 +97,26 @@ class TestRenderedDecisionBackwardCompat:
 
 @pytest.mark.unit
 class TestInitialStateInjection:
-    def test_matching_holding_injected(self, monkeypatch):
-        holdings = [
-            {"code": "600519", "name": "贵州茅台", "quantity": 100, "cost_price": 1400.0},
-            {"code": "000001", "name": "平安银行", "quantity": 500, "cost_price": 10.0},
-        ]
+    def test_simple_dict_injected(self, monkeypatch):
         monkeypatch.setattr(
             "tradingagents.dataflows.config.get_config",
-            lambda: {"holdings": holdings},
+            lambda: {"holdings": {"quantity": 100, "cost_price": 1400.0}},
         )
         state = Propagator().create_initial_state("600519", "2026-08-06")
-        assert len(state["holdings"]) == 1
-        assert state["holdings"][0]["code"] == "600519"
+        assert state["holdings"] == {"quantity": 100, "cost_price": 1400.0}
 
-    def test_no_config_holdings_is_empty(self, monkeypatch):
+    def test_legacy_list_normalized(self, monkeypatch):
         monkeypatch.setattr(
-            "tradingagents.dataflows.config.get_config", lambda: {"holdings": []}
+            "tradingagents.dataflows.config.get_config",
+            lambda: {"holdings": [{"code": "600519", "name": "贵州茅台",
+                                   "quantity": 100, "cost_price": 1400.0}]},
         )
         state = Propagator().create_initial_state("600519", "2026-08-06")
-        assert state["holdings"] == []
+        assert state["holdings"] == {"quantity": 100, "cost_price": 1400.0}
+
+    def test_no_config_holdings_is_none(self, monkeypatch):
+        monkeypatch.setattr(
+            "tradingagents.dataflows.config.get_config", lambda: {"holdings": None}
+        )
+        state = Propagator().create_initial_state("600519", "2026-08-06")
+        assert state["holdings"] is None

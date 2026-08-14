@@ -634,27 +634,28 @@ def get_user_selections():
     }
 
 
-def ask_holdings(ticker: str) -> list:
+def ask_holdings(ticker: str) -> Optional[dict]:
     """Interactively collect an optional holding for the analysed ticker.
 
-    Returns ``[]`` when the user skips (empty cost price). A holding is
-    ``{"code": ticker, "quantity": int, "cost_price": float}`` — the analysis
-    then appends a standalone holding-action advice right after finishing.
+    Returns ``None`` when the user skips (empty cost price). A holding is a
+    single ``{"quantity": int, "cost_price": float}`` dict — no code/name, the
+    analysed ticker IS the holding. The analysis then appends a standalone
+    holding-action advice right after finishing.
     """
-    cost_raw = typer.prompt("持仓成本价（回车跳过）", default="").strip()
+    cost_raw = typer.prompt("持仓均价（回车跳过）", default="").strip()
     if not cost_raw:
-        return []
+        return None
     try:
         cost = float(cost_raw)
     except ValueError:
         console.print("[yellow]成本价无效，已按无持仓处理[/yellow]")
-        return []
-    qty_raw = typer.prompt("持仓数量（股）", default="0").strip()
+        return None
+    qty_raw = typer.prompt("持仓总量（股）", default="0").strip()
     try:
         qty = int(float(qty_raw))
     except ValueError:
         qty = 0
-    return [{"code": ticker, "quantity": qty, "cost_price": cost}]
+    return {"quantity": qty, "cost_price": cost}
 
 
 def get_ticker():
@@ -1032,11 +1033,15 @@ def format_tool_args(args, max_length=80) -> str:
         return result[:max_length - 3] + "..."
     return result
 
-def _load_holdings(path: Path) -> list:
-    """Load and validate a holdings JSON file: [{code, name, quantity, cost_price}].
+def _load_holdings(path: Path) -> dict:
+    """Load and validate a holdings JSON file.
 
-    Fails fast with a clear message on a missing file or a malformed entry —
-    a silently-empty holdings list would silently disable holding guidance.
+    New simple shape: ``{"quantity": int, "cost_price": float}`` (the analysed
+    ticker itself — no code/name). Legacy array of
+    ``[{code, name, quantity, cost_price}]`` is still accepted (first entry
+    wins). Fails fast with a clear message on a missing file or a malformed
+    entry — a silently-empty holdings value would silently disable holding
+    guidance.
     """
     import json
 
@@ -1046,14 +1051,19 @@ def _load_holdings(path: Path) -> list:
         data = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise typer.BadParameter(f"holdings file is not valid JSON: {exc}") from exc
-    if not isinstance(data, list):
-        raise typer.BadParameter("holdings file must contain a JSON array")
-    for i, h in enumerate(data):
-        if not isinstance(h, dict) or not h.get("code"):
-            raise typer.BadParameter(
-                f"holdings[{i}] must be an object with at least a 'code' field"
-            )
-    return data
+    if isinstance(data, list):
+        if not data:
+            return {}
+        data = data[0]
+    if not isinstance(data, dict):
+        raise typer.BadParameter(
+            "holdings file must be {\"quantity\", \"cost_price\"} (or a legacy array)"
+        )
+    if data.get("quantity") is None and data.get("cost_price") is None:
+        raise typer.BadParameter(
+            "holdings must contain at least one of 'quantity' / 'cost_price'"
+        )
+    return {"quantity": data.get("quantity", 0), "cost_price": data.get("cost_price")}
 
 
 def run_analysis(checkpoint: bool = False, holdings: Optional[Path] = None):
