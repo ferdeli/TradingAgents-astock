@@ -12,7 +12,11 @@ import plotly.graph_objects as go
 
 
 def _build_figure(chart_data: dict[str, Any]) -> go.Figure:
-    """Build the candlestick figure. History solid; forecast dashed/translucent."""
+    """Build the candlestick figure. History solid; forecast dashed/translucent.
+
+    A-share colour convention: **red = up, green = down** (opposite of the
+    US convention plotly defaults to).
+    """
     hist = chart_data.get("history", [])
     forecast = chart_data.get("forecast", [])
     rating = chart_data.get("rating", "")
@@ -26,6 +30,8 @@ def _build_figure(chart_data: dict[str, Any]) -> go.Figure:
             low=[h["low"] for h in hist],
             close=[h["close"] for h in hist],
             name="历史",
+            increasing_line_color="#ef4444",   # 红涨
+            decreasing_line_color="#22c55e",   # 绿跌
         )
     )
     if forecast:
@@ -38,10 +44,10 @@ def _build_figure(chart_data: dict[str, Any]) -> go.Figure:
                 low=[f["low"] for f in forecast],
                 close=[f["close"] for f in forecast],
                 name="预测（示意）",
-                increasing_line_color="rgba(34,197,94,0.65)",
-                decreasing_line_color="rgba(239,68,68,0.65)",
-                increasing_fillcolor="rgba(34,197,94,0.25)",
-                decreasing_fillcolor="rgba(239,68,68,0.25)",
+                increasing_line_color="rgba(239,68,68,0.65)",
+                decreasing_line_color="rgba(34,197,94,0.65)",
+                increasing_fillcolor="rgba(239,68,68,0.25)",
+                decreasing_fillcolor="rgba(34,197,94,0.25)",
             )
         )
 

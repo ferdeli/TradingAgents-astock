@@ -237,7 +237,7 @@ class TestHoldingAdvice:
 
     def test_build_holding_advice(self):
         md = ea.build_holding_advice(
-            [{"code": "600519", "quantity": 100, "cost_price": 1400.0}],
+            {"quantity": 100, "cost_price": 1400.0},
             {"price": 1540.0},
             self.DECISION_WITH_ACTION,
         )
@@ -248,7 +248,7 @@ class TestHoldingAdvice:
 
     def test_build_holding_advice_no_action(self):
         md = ea.build_holding_advice(
-            [{"code": "600519", "quantity": 100, "cost_price": 1400.0}],
+            {"quantity": 100, "cost_price": 1400.0},
             None,
             "**Rating**: Hold",
         )
@@ -256,14 +256,14 @@ class TestHoldingAdvice:
         assert "盈亏" not in md                      # no snapshot → no PnL
 
     def test_build_holding_advice_empty_holdings(self):
-        assert ea.build_holding_advice([], None, "") == ""
+        assert ea.build_holding_advice(None, None, "") == ""
 
 
 @pytest.mark.unit
 class TestNodeHoldingAdviceEmission:
     def _state_with_holding(self, rating_text="**Rating**: Buy"):
         s = _state(rating_text)
-        s["holdings"] = [{"code": "600519", "quantity": 100, "cost_price": 1400.0}]
+        s["holdings"] = {"quantity": 100, "cost_price": 1400.0}
         return s
 
     def test_holding_advice_emitted_for_buy(self, monkeypatch):

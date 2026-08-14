@@ -193,16 +193,12 @@ def _build_config() -> dict:
             config["agent_sdk_model"] = sub_model
     if scope == "all":
         config["quick_think_provider_override"] = "claude_agent_sdk"
-    # M2: holdings from the sidebar JSON box (kept in session_state).
-    holdings = st.session_state.get("holdings_json", "").strip()
-    if holdings:
-        try:
-            import json
-            parsed = json.loads(holdings)
-            if isinstance(parsed, list):
-                config["holdings"] = parsed
-        except json.JSONDecodeError:
-            pass  # invalid JSON in the box → run without holdings, never crash
+    # M2: holdings from the two sidebar inputs (均价 + 总量) — single dict,
+    # no code/name (the analysed ticker IS the holding).
+    cost = st.session_state.get("holding_cost_price", 0.0) or 0.0
+    qty = st.session_state.get("holding_quantity", 0) or 0
+    if cost > 0:
+        config["holdings"] = {"quantity": qty, "cost_price": cost}
     return config
 
 

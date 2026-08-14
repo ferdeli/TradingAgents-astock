@@ -1,7 +1,6 @@
 # TradingAgents/graph/propagation.py
 
-import re
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, List, Optional
 from tradingagents.agents.utils.agent_states import (
     AgentState,
     InvestDebateState,
@@ -9,25 +8,32 @@ from tradingagents.agents.utils.agent_states import (
 )
 
 
-def _digits(value: object) -> str:
-    """Extract the numeric part of a code, e.g. 'sh600519' / '600519' -> '600519'."""
-    return re.sub(r"\D", "", str(value))
+def _normalize_holdings(raw: Any) -> Optional[Dict[str, Any]]:
+    """Normalise config holdings to a single ``{"quantity", "cost_price"}`` dict.
 
+    Accepted shapes:
+    - new simple object: ``{"quantity": 100, "cost_price": 1400.0}``
+    - legacy list of ``{"code", "name", "quantity", "cost_price"}`` — the
+      first entry wins (single-ticker analysis: the holding IS the ticker
+      being analysed, so code/name are redundant)
 
-def _holding_matches(holding: Dict[str, Any], company_name: str) -> bool:
-    """True when a holding entry corresponds to the analysed instrument.
-
-    Matches on the 6-digit code (normalised, prefix/suffix tolerant) or on an
-    exact Chinese/display name. No fuzzy/partial matching, so unrelated
-    names never leak into the prompt.
+    Returns ``None`` when absent/empty, so the plain analysis path is
+    unchanged.
     """
-    code = _digits(holding.get("code", ""))
-    name = str(holding.get("name", "")).strip()
-    target_code = _digits(company_name)
-    target_name = str(company_name).strip()
-    if code and len(code) >= 6 and code == target_code:
-        return True
-    return bool(name) and name == target_name
+    if isinstance(raw, dict) and (
+        raw.get("quantity") is not None or raw.get("cost_price") is not None
+    ):
+        return {
+            "quantity": raw.get("quantity", 0),
+            "cost_price": raw.get("cost_price"),
+        }
+    if isinstance(raw, list) and raw and isinstance(raw[0], dict):
+        first = raw[0]
+        return {
+            "quantity": first.get("quantity", 0),
+            "cost_price": first.get("cost_price"),
+        }
+    return None
 
 
 class Propagator:
@@ -42,22 +48,19 @@ class Propagator:
     ) -> Dict[str, Any]:
         """Create the initial state for the agent graph.
 
-        ``holdings`` is injected from the current config, filtered to entries
-        that match ``company_name`` (6-digit code or exact name), so the
-        Portfolio Manager can produce holding-management guidance.
+        ``holdings`` is injected from the current config as a single
+        ``{"quantity", "cost_price"}`` dict (or None) — the analysis is for
+        the held ticker itself, so no code/name matching is needed.
         """
         from tradingagents.dataflows.config import get_config
 
-        all_holdings = get_config().get("holdings", []) or []
-        matching = [
-            h for h in all_holdings if _holding_matches(h, company_name)
-        ]
+        holding = _normalize_holdings(get_config().get("holdings"))
         return {
             "messages": [("human", company_name)],
             "company_of_interest": company_name,
             "trade_date": str(trade_date),
             "past_context": past_context,
-            "holdings": matching,
+            "holdings": holding,
             "investment_debate_state": InvestDebateState(
                 {
                     "bull_history": "",

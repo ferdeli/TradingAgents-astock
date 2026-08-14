@@ -158,19 +158,18 @@ def parse_position_advice(decision_md: str) -> tuple[Optional[str], Optional[flo
 
 
 def build_holding_advice(
-    holdings: list, snapshot: Optional[dict], decision_md: str
+    holding: Optional[dict], snapshot: Optional[dict], decision_md: str
 ) -> str:
     """Render a standalone holding-action block for immediate display.
 
     Combines the user's position (cost/quantity/PnL) with the PM's
-    position_action / target_position_pct. ``holdings`` is already filtered to
-    the analysed ticker by ``Propagator.create_initial_state``.
+    position_action / target_position_pct. ``holding`` is a single
+    ``{"quantity", "cost_price"}`` dict for the analysed ticker (or None).
     """
-    if not holdings:
+    if not holding:
         return ""
-    h = holdings[0]
-    quantity = h.get("quantity", 0)
-    cost = h.get("cost_price")
+    quantity = holding.get("quantity", 0)
+    cost = holding.get("cost_price")
 
     lines = ["**当前持仓（研究参考）**", ""]
     if cost:
@@ -213,10 +212,10 @@ def create_execution_advisor(llm):
         rating = parse_rating(state.get("final_trade_decision", ""))
         instrument_context = build_instrument_context(ticker)
 
-        holdings = state.get("holdings", []) or []
-        # Snapshot is needed for holding PnL (holdings present) and for the
+        holding = state.get("holdings")  # single {"quantity", "cost_price"} or None
+        # Snapshot is needed for holding PnL (holding present) and for the
         # buy path's price levels; fetch once, reuse both.
-        need_snapshot = bool(holdings) or rating in _BUY_RATINGS
+        need_snapshot = bool(holding) or rating in _BUY_RATINGS
         snapshot = _fetch_price_snapshot(ticker, trade_date) if need_snapshot else None
 
         # Non-buy ratings: no LLM call, deterministic placeholder.
@@ -287,9 +286,9 @@ Guidance:
                 advice = rendered
 
         result = {"execution_advice": advice}
-        if holdings:
+        if holding:
             result["holding_advice"] = build_holding_advice(
-                holdings,
+                holding,
                 snapshot,
                 state.get("final_trade_decision", ""),
             )
