@@ -193,12 +193,8 @@ def _build_config() -> dict:
             config["agent_sdk_model"] = sub_model
     if scope == "all":
         config["quick_think_provider_override"] = "claude_agent_sdk"
-    # M2: holdings from the two sidebar inputs (均价 + 总量) — single dict,
-    # no code/name (the analysed ticker IS the holding).
-    cost = st.session_state.get("holding_cost_price", 0.0) or 0.0
-    qty = st.session_state.get("holding_quantity", 0) or 0
-    if cost > 0:
-        config["holdings"] = {"quantity": qty, "cost_price": cost}
+    # Holdings are per-ticker now (each sidebar row carries its own cost/qty);
+    # the batch runner injects the matching holding into config per ticker.
     return config
 
 
@@ -219,6 +215,7 @@ if start_req:
         "index": 0,
         "trade_date": trade_date,
         "config": _build_config(),
+        "holdings_map": start_req.get("holdings_map", {}),  # ticker -> {quantity, cost_price}
         "results": {},          # ticker -> {final_state, signal, trade_date, error?}
         "done": False,
         "interrupted": False,
@@ -235,6 +232,9 @@ def _start_batch_current() -> None:
     ticker = batch["tickers"][batch["index"]]
     clear_incomplete_task(ticker, batch["trade_date"])
     clear_checkpoint(DEFAULT_CONFIG["data_cache_dir"], ticker, batch["trade_date"])
+    # Per-ticker holdings: this ticker's row (均价>0) → config.holdings.
+    config = dict(batch["config"])
+    config["holdings"] = (batch.get("holdings_map") or {}).get(ticker)
     tracker = ProgressTracker(
         ticker=ticker,
         trade_date=batch["trade_date"],
@@ -243,7 +243,7 @@ def _start_batch_current() -> None:
     run_analysis_in_thread(
         ticker=ticker,
         trade_date=batch["trade_date"],
-        config=batch["config"],
+        config=config,
         tracker=tracker,
     )
 

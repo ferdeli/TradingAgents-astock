@@ -265,30 +265,53 @@ def render_sidebar() -> None:
     st.markdown("---")
     st.markdown("#### 新建分析")
 
-    # ── 多标的：动态列表录入（可增删多行，共享日期/模型/持仓参数）──
+    # ── 多标的：动态列表录入（每行标的联动该行持仓均价/总量）──
     st.markdown("**分析标的**")
     ticker_count = st.session_state.get("ticker_count", 1)
 
     def _remove_ticker_row(idx: int) -> None:
         n = st.session_state.get("ticker_count", 1)
-        vals = [st.session_state.get(f"ticker_row_{j}", "") for j in range(n)]
-        vals.pop(idx)
-        for j in range(n - 1):
-            st.session_state[f"ticker_row_{j}"] = vals[j]
-        st.session_state[f"ticker_row_{n - 1}"] = ""   # clear the tail slot
+        keys = ("ticker_row_", "holding_cost_", "holding_qty_")
+        vals = {k: [st.session_state.get(f"{k}{j}", "") for j in range(n)] for k in keys}
+        for k in keys:
+            vals[k].pop(idx)
+            for j in range(n - 1):
+                st.session_state[f"{k}{j}"] = vals[k][j]
+            st.session_state[f"{k}{n - 1}"] = ""   # clear the tail slot
         st.session_state["ticker_count"] = max(1, n - 1)
+
+    h1, h2, h3 = st.columns([4, 2, 2])
+    with h1:
+        st.caption("标的")
+    with h2:
+        st.caption("持仓均价")
+    with h3:
+        st.caption("持仓总量")
 
     ticker_inputs: list[str] = []
     for i in range(ticker_count):
-        col1, col2 = st.columns([5, 1])
-        with col1:
+        c_t, c_p, c_q, c_x = st.columns([4, 2, 2, 1])
+        with c_t:
             val = st.text_input(
                 f"标的 {i+1}",
-                placeholder="例: 300750 或 宁德时代",
+                placeholder="代码或名称",
                 key=f"ticker_row_{i}",
-                help="输入6位A股代码或中文股票全称；可添加多行，按顺序依次分析。",
+                label_visibility="collapsed",
+                help="输入6位A股代码或中文股票全称；每行可填该标的的持仓均价/总量，分析时联动。",
             )
-        with col2:
+        with c_p:
+            st.number_input(
+                f"均价{i}", min_value=0.0, step=0.01, value=0.0,
+                key=f"holding_cost_{i}", label_visibility="collapsed",
+                help="该标的持仓均价（留 0 = 无持仓，不生成持仓操作建议）",
+            )
+        with c_q:
+            st.number_input(
+                f"总量{i}", min_value=0, step=100, value=0,
+                key=f"holding_qty_{i}", label_visibility="collapsed",
+                help="该标的持仓总量（股）",
+            )
+        with c_x:
             st.write("")
             st.button(
                 "✖", key=f"remove_row_{i}", disabled=ticker_count <= 1,
@@ -322,16 +345,6 @@ def render_sidebar() -> None:
     with st.expander("⚙️ 模型配置", expanded=False):
         _render_llm_config()
 
-    with st.expander("💼 当前持仓（可选）", expanded=False):
-        st.number_input(
-            "持仓均价", min_value=0.0, step=0.01, value=0.0, key="holding_cost_price",
-            help="当前分析标的的持仓均价（成本）。留 0 = 无持仓，不生成持仓操作建议。",
-        )
-        st.number_input(
-            "持仓总量（股）", min_value=0, step=100, value=0, key="holding_quantity",
-            help="当前分析标的的持仓总量。",
-        )
-
     tracker = st.session_state.get("tracker")
     is_busy = tracker is not None and tracker.is_running
     is_stopping = is_busy and tracker.stop_requested
@@ -344,20 +357,28 @@ def render_sidebar() -> None:
     ):
         resolved: list[str] = []
         errors: list[str] = []
-        for raw in tickers:
-            code, err = _resolve_user_input(raw)
+        holdings_map: dict[str, dict] = {}
+        for i in range(ticker_count):
+            raw = st.session_state.get(f"ticker_row_{i}", "")
+            if not raw or not raw.strip():
+                continue
+            code, err = _resolve_user_input(raw.strip())
             if err:
                 errors.append(f"{raw}: {err}")
-            else:
-                if code != raw.strip():
-                    st.success(f"✅ {raw.strip()} → {code}")
-                resolved.append(code)
+                continue
+            resolved.append(code)
+            # 每行标的联动该行持仓：均价 > 0 才视为有持仓
+            cost = float(st.session_state.get(f"holding_cost_{i}", 0.0) or 0.0)
+            if cost > 0:
+                qty = int(st.session_state.get(f"holding_qty_{i}", 0) or 0)
+                holdings_map[code] = {"quantity": qty, "cost_price": cost}
         if errors:
             st.error("❌ " + "；".join(errors))
         elif resolved:
             st.session_state["start_analysis"] = {
                 "tickers": resolved,
                 "trade_date": trade_date.strftime("%Y-%m-%d"),
+                "holdings_map": holdings_map,
                 "fresh": True,
             }
             st.session_state["viewing_history"] = None
