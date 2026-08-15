@@ -265,12 +265,41 @@ def render_sidebar() -> None:
     st.markdown("---")
     st.markdown("#### 新建分析")
 
-    ticker = st.text_input(
-        "股票代码",
-        placeholder="例: 300750 或 宁德时代",
-        key="input_ticker",
-        help="输入6位A股代码或中文股票全称",
-    )
+    # ── 多标的：动态列表录入（可增删多行，共享日期/模型/持仓参数）──
+    st.markdown("**分析标的**")
+    ticker_count = st.session_state.get("ticker_count", 1)
+
+    def _remove_ticker_row(idx: int) -> None:
+        n = st.session_state.get("ticker_count", 1)
+        vals = [st.session_state.get(f"ticker_row_{j}", "") for j in range(n)]
+        vals.pop(idx)
+        for j in range(n - 1):
+            st.session_state[f"ticker_row_{j}"] = vals[j]
+        st.session_state[f"ticker_row_{n - 1}"] = ""   # clear the tail slot
+        st.session_state["ticker_count"] = max(1, n - 1)
+
+    ticker_inputs: list[str] = []
+    for i in range(ticker_count):
+        col1, col2 = st.columns([5, 1])
+        with col1:
+            val = st.text_input(
+                f"标的 {i+1}",
+                placeholder="例: 300750 或 宁德时代",
+                key=f"ticker_row_{i}",
+                help="输入6位A股代码或中文股票全称；可添加多行，按顺序依次分析。",
+            )
+        with col2:
+            st.write("")
+            st.button(
+                "✖", key=f"remove_row_{i}", disabled=ticker_count <= 1,
+                on_click=_remove_ticker_row, args=(i,), use_container_width=True,
+            )
+        if val and val.strip():
+            ticker_inputs.append(val.strip())
+    if st.button("➕ 添加标的", key="add_ticker_row", use_container_width=True):
+        st.session_state["ticker_count"] = ticker_count + 1
+
+    tickers = ticker_inputs
 
     trade_date = st.date_input(
         "分析日期",
@@ -310,23 +339,30 @@ def render_sidebar() -> None:
     if st.button(
         "开始分析" if not is_busy else "停止中..." if is_stopping else "分析进行中...",
         use_container_width=True,
-        disabled=is_busy or not ticker,
+        disabled=is_busy or not tickers,
         type="primary",
     ):
-        resolved_code, err = _resolve_user_input(ticker)
-        if err:
-            st.error(f"❌ {err}")
-        else:
-            if resolved_code != ticker.strip():
-                st.success(f"✅ {ticker.strip()} → {resolved_code}")
+        resolved: list[str] = []
+        errors: list[str] = []
+        for raw in tickers:
+            code, err = _resolve_user_input(raw)
+            if err:
+                errors.append(f"{raw}: {err}")
+            else:
+                if code != raw.strip():
+                    st.success(f"✅ {raw.strip()} → {code}")
+                resolved.append(code)
+        if errors:
+            st.error("❌ " + "；".join(errors))
+        elif resolved:
             st.session_state["start_analysis"] = {
-                "ticker": resolved_code,
+                "tickers": resolved,
                 "trade_date": trade_date.strftime("%Y-%m-%d"),
                 "fresh": True,
             }
             st.session_state["viewing_history"] = None
 
-    _render_analysis_controls(ticker, trade_date)
+    _render_analysis_controls(tickers[0] if tickers else "", trade_date)
 
     st.markdown("---")
     st.markdown("#### 未完成任务")

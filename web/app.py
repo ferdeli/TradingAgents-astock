@@ -208,38 +208,97 @@ with st.sidebar:
     render_sidebar()
 
 
-# ── Handle "Start Analysis" trigger ──────────────────────────────────────────
+# ── Handle "Start Analysis" trigger (multi-ticker batch) ─────────────────────
 
 start_req = st.session_state.pop("start_analysis", None)
 if start_req:
-    if start_req.get("fresh"):
-        from tradingagents.graph.checkpointer import clear_checkpoint
+    tickers = start_req.get("tickers") or [start_req.get("ticker", "")]
+    trade_date = start_req["trade_date"]
+    st.session_state["batch"] = {
+        "tickers": [t for t in tickers if t],
+        "index": 0,
+        "trade_date": trade_date,
+        "config": _build_config(),
+        "results": {},          # ticker -> {final_state, signal, trade_date, error?}
+        "done": False,
+        "interrupted": False,
+    }
+    st.session_state["viewing_history"] = None
+    _start_batch_current()
 
-        clear_incomplete_task(start_req["ticker"], start_req["trade_date"])
-        clear_checkpoint(
-            DEFAULT_CONFIG["data_cache_dir"],
-            start_req["ticker"],
-            start_req["trade_date"],
-        )
 
+def _start_batch_current() -> None:
+    """Start (or restart) the tracker for the current batch index."""
+    from tradingagents.graph.checkpointer import clear_checkpoint
+
+    batch = st.session_state["batch"]
+    ticker = batch["tickers"][batch["index"]]
+    clear_incomplete_task(ticker, batch["trade_date"])
+    clear_checkpoint(DEFAULT_CONFIG["data_cache_dir"], ticker, batch["trade_date"])
     tracker = ProgressTracker(
-        ticker=start_req["ticker"],
-        trade_date=start_req["trade_date"],
+        ticker=ticker,
+        trade_date=batch["trade_date"],
     )
     st.session_state["tracker"] = tracker
-    st.session_state["viewing_history"] = None
     run_analysis_in_thread(
-        ticker=start_req["ticker"],
-        trade_date=start_req["trade_date"],
-        config=_build_config(),
+        ticker=ticker,
+        trade_date=batch["trade_date"],
+        config=batch["config"],
         tracker=tracker,
     )
+
+
+def _advance_batch(*, failed: bool = False) -> None:
+    """Record the current ticker's outcome and start the next one, or finish."""
+    batch = st.session_state["batch"]
+    tracker = st.session_state.get("tracker")
+    result = {
+        "final_state": None if failed else tracker.final_state,
+        "signal": "ERROR" if failed else tracker.signal,
+        "trade_date": tracker.trade_date,
+        "error": tracker.error if failed else None,
+    }
+    batch["results"][tracker.ticker] = result
+    st.session_state["tracker"] = None
+    batch["index"] += 1
+    if batch["index"] < len(batch["tickers"]) and not batch.get("interrupted"):
+        _start_batch_current()
+    else:
+        batch["done"] = True
+
+
+def _render_batch_results() -> None:
+    """Render per-ticker tabs for the completed results of a batch."""
+    batch = st.session_state.get("batch")
+    if not batch or not batch.get("results"):
+        return
+    done_tickers = [t for t in batch["tickers"] if t in batch["results"]]
+    if not done_tickers:
+        return
+    if not batch.get("done"):
+        idx = batch["index"]
+        status = (
+            f"，正在分析 {batch['tickers'][idx]}"
+            if idx < len(batch["tickers"]) else ""
+        )
+        st.info(f"⏳ 批量进度：已完成 {len(batch['results'])}/{len(batch['tickers'])}{status}")
+    elif batch.get("interrupted"):
+        st.warning("已停止：仅展示已完成标的的分析结果。")
+    tabs = st.tabs([f"📈 {t}" for t in done_tickers])
+    for tab, t in zip(tabs, done_tickers):
+        with tab:
+            r = batch["results"][t]
+            if r.get("error"):
+                st.error(f"分析失败: {r['error']}")
+            else:
+                render_report(r["final_state"], t, r["trade_date"], r["signal"])
 
 
 # ── Main area state machine ─────────────────────────────────────────────────
 
 tracker: ProgressTracker | None = st.session_state.get("tracker")
 viewing_history: str | None = st.session_state.get("viewing_history")
+batch = st.session_state.get("batch")
 
 # State 1: Viewing a historical analysis
 if viewing_history:
@@ -254,13 +313,41 @@ if viewing_history:
     except Exception as exc:
         st.error(f"加载失败: {exc}")
 
-# State 2: Analysis running
+# Batch mode: stopped current ticker → interrupt the whole batch
+elif batch and tracker and tracker.stop_requested:
+    batch["interrupted"] = True
+    batch["done"] = True
+    st.session_state["tracker"] = None
+    st.rerun()
+
+# Batch mode: analysis running → progress + already-finished tabs
+elif batch and tracker and tracker.is_running:
+    render_progress(tracker)
+    _render_batch_results()
+    time.sleep(2)
+    st.rerun()
+
+# Batch mode: current ticker finished → advance to next / done
+elif batch and tracker and tracker.is_complete:
+    _advance_batch()
+    st.rerun()
+
+# Batch mode: current ticker errored → skip it and continue the batch
+elif batch and tracker and tracker.error:
+    _advance_batch(failed=True)
+    st.rerun()
+
+# Batch mode: done (or interrupted) → render all results in tabs
+elif batch and batch.get("done"):
+    _render_batch_results()
+
+# State 2: Analysis running (single ticker, no batch)
 elif tracker and tracker.is_running:
     render_progress(tracker)
     time.sleep(2)
     st.rerun()
 
-# State 3: Analysis complete
+# State 3: Analysis complete (single ticker)
 elif tracker and tracker.is_complete:
     render_report(
         tracker.final_state,
@@ -270,7 +357,7 @@ elif tracker and tracker.is_complete:
         elapsed=tracker.elapsed,
     )
 
-# State 4: Analysis errored
+# State 4: Analysis errored (single ticker)
 elif tracker and tracker.error:
     st.error(f"分析失败: {tracker.error}")
     st.caption("已完成阶段会保存在本地断点中；修复模型额度或配置后，可以继续未完成的部分。")
