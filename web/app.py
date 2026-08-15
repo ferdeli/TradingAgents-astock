@@ -198,32 +198,6 @@ def _build_config() -> dict:
     return config
 
 
-# ── Sidebar ──────────────────────────────────────────────────────────────────
-
-with st.sidebar:
-    render_sidebar()
-
-
-# ── Handle "Start Analysis" trigger (multi-ticker batch) ─────────────────────
-
-start_req = st.session_state.pop("start_analysis", None)
-if start_req:
-    tickers = start_req.get("tickers") or [start_req.get("ticker", "")]
-    trade_date = start_req["trade_date"]
-    st.session_state["batch"] = {
-        "tickers": [t for t in tickers if t],
-        "index": 0,
-        "trade_date": trade_date,
-        "config": _build_config(),
-        "holdings_map": start_req.get("holdings_map", {}),  # ticker -> {quantity, cost_price}
-        "results": {},          # ticker -> {final_state, signal, trade_date, error?}
-        "done": False,
-        "interrupted": False,
-    }
-    st.session_state["viewing_history"] = None
-    _start_batch_current()
-
-
 def _start_batch_current() -> None:
     """Start (or restart) the tracker for the current batch index."""
     from tradingagents.graph.checkpointer import clear_checkpoint
@@ -292,6 +266,32 @@ def _render_batch_results() -> None:
                 st.error(f"分析失败: {r['error']}")
             else:
                 render_report(r["final_state"], t, r["trade_date"], r["signal"])
+
+
+# ── Sidebar ──────────────────────────────────────────────────────────────────
+
+with st.sidebar:
+    render_sidebar()
+
+
+# ── Handle "Start Analysis" trigger (multi-ticker batch) ─────────────────────
+
+start_req = st.session_state.pop("start_analysis", None)
+if start_req:
+    tickers = start_req.get("tickers") or [start_req.get("ticker", "")]
+    trade_date = start_req["trade_date"]
+    st.session_state["batch"] = {
+        "tickers": [t for t in tickers if t],
+        "index": 0,
+        "trade_date": trade_date,
+        "config": _build_config(),
+        "holdings_map": start_req.get("holdings_map", {}),  # ticker -> {quantity, cost_price}
+        "results": {},          # ticker -> {final_state, signal, trade_date, error?}
+        "done": False,
+        "interrupted": False,
+    }
+    st.session_state["viewing_history"] = None
+    _start_batch_current()
 
 
 # ── Main area state machine ─────────────────────────────────────────────────
