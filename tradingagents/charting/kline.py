@@ -196,6 +196,43 @@ def synthesize_forecast(
     return rows
 
 
+def _cache_has_dates(cached: Optional[dict]) -> bool:
+    """True when the cached payload carries per-candle date fields.
+
+    Legacy caches (written before the date feature) lack ``date``; treating
+    them as a miss lets the next build regenerate the payload with dates.
+    """
+    if not cached or not cached.get("history"):
+        return False
+    return "date" in cached["history"][0]
+
+
+def _build_chart_from_hist(
+    hist: pd.DataFrame,
+    ticker: str,
+    rating: str,
+    advice: Optional[dict],
+    forecast_days: int,
+) -> dict[str, Any]:
+    """Assemble the chart payload from a normalized OHLCV frame (with dates)."""
+    history = [
+        {
+            "index": i,
+            "date": pd.to_datetime(r["Date"]).strftime("%Y-%m-%d"),
+            "open": float(r["Open"]), "high": float(r["High"]),
+            "low": float(r["Low"]), "close": float(r["Close"]),
+        }
+        for i, r in hist.iterrows()
+    ]
+    forecast = synthesize_forecast(hist, rating, advice, days=forecast_days)
+    return {
+        "ticker": ticker,
+        "history": history,
+        "forecast": forecast,
+        "rating": rating,
+    }
+
+
 def build_chart_data(
     ticker: str,
     trade_date: str,
@@ -213,41 +250,40 @@ def build_chart_data(
     With ``use_disk_cache`` (default) the payload is cached per
     ticker+date+advice on disk, so rendering a report — including reopening a
     historical one — hits the cache instead of re-fetching OHLCV over the
-    network. ``ohlcv_text`` injection bypasses the cache entirely (tests).
+    network. Legacy caches without per-candle dates are treated as a miss and
+    regenerated. ``ohlcv_text`` injection bypasses the cache entirely (tests).
 
-    ``offline=True`` (history browsing): the disk cache is the ONLY data
-    source — a cache miss returns None immediately instead of fetching OHLCV
-    over the network, so browsing a historical report never blocks the page
-    on mootdx/sina requests.
+    ``offline=True`` (history browsing): no network fetches. The kline disk
+    cache is checked first; on a miss the local ``{code}-astock-daily.csv``
+    cache is used to rebuild (with dates), and only if that is absent either
+    does the function return None — so browsing a historical report never
+    blocks on mootdx/sina requests.
     """
     if use_disk_cache and ohlcv_text is None:
         cached = _load_disk_cache(ticker, trade_date, advice_md)
-        if cached is not None:
+        if _cache_has_dates(cached):
             return cached
+
     if offline:
-        return None  # cache miss while browsing history: degrade fast, no network
+        # No network: rebuild from the local astock CSV cache if present.
+        from tradingagents.dataflows.a_stock import _load_ohlcv_disk_cache
+
+        hist, found = _load_ohlcv_disk_cache(ticker, start_date=None, end_date=trade_date)
+        if not found:
+            return None
+        rating_parsed = parse_rating(rating, default="Hold")
+        advice = advice_from_markdown(advice_md)
+        chart = _build_chart_from_hist(hist, ticker, rating_parsed, advice, forecast_days)
+        if use_disk_cache:
+            _save_disk_cache(ticker, trade_date, advice_md, chart)
+        return chart
 
     hist = load_ohlcv(ticker, trade_date, ohlcv_text)
     if hist is None:
         return None
-    rating = parse_rating(rating, default="Hold")
+    rating_parsed = parse_rating(rating, default="Hold")
     advice = advice_from_markdown(advice_md)
-    history = [
-        {
-            "index": i,
-            "date": str(r["Date"]),
-            "open": float(r["Open"]), "high": float(r["High"]),
-            "low": float(r["Low"]), "close": float(r["Close"]),
-        }
-        for i, r in hist.iterrows()
-    ]
-    forecast = synthesize_forecast(hist, rating, advice, days=forecast_days)
-    chart = {
-        "ticker": ticker,
-        "history": history,
-        "forecast": forecast,
-        "rating": rating,
-    }
+    chart = _build_chart_from_hist(hist, ticker, rating_parsed, advice, forecast_days)
     if use_disk_cache and ohlcv_text is None:
         _save_disk_cache(ticker, trade_date, advice_md, chart)
     return chart

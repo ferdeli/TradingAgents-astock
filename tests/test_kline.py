@@ -215,3 +215,58 @@ class TestHistoryDateAndOffline:
                   "forecast": [], "rating": "Hold"}
         fig2 = _build_figure(legacy)
         assert [list(c) for c in fig2.data[0].customdata] == [["#0"]]
+
+
+@pytest.mark.unit
+class TestLegacyCacheUpgrade:
+    """Legacy kline caches (no per-candle date) must be regenerated with dates."""
+
+    LEGACY = {
+        "ticker": "600519",
+        "history": [{"index": 0, "open": 10.0, "high": 10.5, "low": 9.8, "close": 10.2}],
+        "forecast": [],
+        "rating": "Buy",
+    }
+
+    def test_legacy_cache_miss_and_rebuild_from_csv(self, monkeypatch, tmp_path):
+        cache_dir = tmp_path / "kline"
+        csv_dir = tmp_path / "csv"
+        monkeypatch.setattr(kline, "_kline_cache_dir", lambda: str(cache_dir))
+        csv_dir.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr(
+            "tradingagents.dataflows.config.get_config",
+            lambda: {"data_cache_dir": str(csv_dir)},
+        )
+        # Disk cache files are plain CSV (no '#' header lines — that shape is
+        # only for the get_stock_data *text* payload).
+        plain_csv = "\n".join(
+            ln for ln in CSV.splitlines() if not ln.lstrip().startswith("#")
+        )
+        (csv_dir / "600519-astock-daily.csv").write_text(plain_csv, encoding="utf-8")
+
+        # Seed a legacy (date-less) kline cache so the key already exists.
+        kline._save_disk_cache("600519", "2026-07-05", ADVICE_MD, self.LEGACY)
+
+        chart = kline.build_chart_data(
+            "600519", "2026-07-05", advice_md=ADVICE_MD, rating="Buy",
+            offline=True,  # history browsing: no network
+        )
+        assert chart is not None
+        assert chart["history"][0]["date"] == "2026-07-01"   # rebuilt WITH dates
+        assert chart["history"][-1]["date"] == "2026-07-05"
+
+        # The regenerated payload is now cached (with dates) → next hit.
+        chart2 = kline.build_chart_data(
+            "600519", "2026-07-05", advice_md=ADVICE_MD, rating="Buy", offline=True
+        )
+        assert chart2 == chart
+
+    def test_offline_without_any_local_data_returns_none(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(kline, "_kline_cache_dir", lambda: str(tmp_path / "kline"))
+        monkeypatch.setattr(
+            "tradingagents.dataflows.config.get_config",
+            lambda: {"data_cache_dir": str(tmp_path / "csv")},
+        )
+        assert kline.build_chart_data(
+            "600519", "2026-07-05", advice_md=ADVICE_MD, rating="Buy", offline=True
+        ) is None
