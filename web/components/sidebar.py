@@ -139,6 +139,7 @@ def _render_llm_config() -> None:
         "LLM 供应商",
         range(len(_PROVIDERS)),
         format_func=lambda i: _PROVIDER_DISPLAY[i],
+        index=_PROVIDER_KEYS.index("deepseek"),   # 默认 DeepSeek
         key="llm_provider_idx",
         help="选择你配置了 API Key 的供应商",
     )

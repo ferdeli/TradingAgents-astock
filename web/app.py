@@ -158,9 +158,9 @@ st.markdown(
 
 def _build_config() -> dict:
     config = DEFAULT_CONFIG.copy()
-    config["llm_provider"] = st.session_state.get("llm_provider", "minimax")
-    config["deep_think_llm"] = st.session_state.get("deep_think_llm", "MiniMax-M2.7")
-    config["quick_think_llm"] = st.session_state.get("quick_think_llm", "MiniMax-M2.7-highspeed")
+    config["llm_provider"] = st.session_state.get("llm_provider", "deepseek")
+    config["deep_think_llm"] = st.session_state.get("deep_think_llm", "deepseek-v4-pro")
+    config["quick_think_llm"] = st.session_state.get("quick_think_llm", "deepseek-v4-flash")
     # Optional third-party / proxy endpoint. Sidebar input wins, else .env BACKEND_URL.
     backend_url = (st.session_state.get("llm_base_url") or os.getenv("BACKEND_URL") or "").strip()
     config["backend_url"] = backend_url or None
@@ -265,7 +265,40 @@ def _render_batch_results() -> None:
             if r.get("error"):
                 st.error(f"分析失败: {r['error']}")
             else:
-                render_report(r["final_state"], t, r["trade_date"], r["signal"])
+                render_report(r["final_state"], t, r["trade_date"], r["signal"], offline=True)
+
+
+def _render_batch_progress(tracker) -> None:
+    """Per-ticker tabs WHILE the batch runs: the current ticker shows its live
+    progress panel, finished tickers show their results, pending ones wait.
+
+    Keeps every ticker's output on its own tab so a multi-ticker run stays
+    readable. Results inside the progress view render offline (cache-only) so
+    a rerun never blocks on network fetches; the full report is available
+    from the final results tabs once the batch finishes.
+    """
+    batch = st.session_state["batch"]
+    labels: list[str] = []
+    for i, t in enumerate(batch["tickers"]):
+        if t in batch["results"]:
+            labels.append(f"✅ {t}")
+        elif i == batch["index"]:
+            labels.append(f"⏳ {t}")
+        else:
+            labels.append(f"⏸ {t}")
+    tabs = st.tabs(labels)
+    for i, (tab, t) in enumerate(zip(tabs, batch["tickers"])):
+        with tab:
+            if t in batch["results"]:
+                r = batch["results"][t]
+                if r.get("error"):
+                    st.error(f"分析失败: {r['error']}")
+                else:
+                    render_report(r["final_state"], t, r["trade_date"], r["signal"], offline=True)
+            elif i == batch["index"]:
+                render_progress(tracker)
+            else:
+                st.caption("⏸ 等待分析…")
 
 
 # ── Sidebar ──────────────────────────────────────────────────────────────────
@@ -320,10 +353,9 @@ elif batch and tracker and tracker.stop_requested:
     st.session_state["tracker"] = None
     st.rerun()
 
-# Batch mode: analysis running → progress + already-finished tabs
+# Batch mode: analysis running → per-ticker tabs (current shows live progress)
 elif batch and tracker and tracker.is_running:
-    render_progress(tracker)
-    _render_batch_results()
+    _render_batch_progress(tracker)
     time.sleep(2)
     st.rerun()
 
