@@ -51,11 +51,17 @@ def render_report(
     trade_date: str,
     signal: str,
     elapsed: float | None = None,
+    offline: bool = False,
 ) -> None:
-    """Render the full analysis report."""
+    """Render the full analysis report.
+
+    ``offline=True`` (history browsing): never trigger network fetches —
+    the K-line shows only from cache, and the stock name comes from the saved
+    state rather than the mootdx market map, so the page renders immediately.
+    """
 
     color, cn_signal = _signal_style(signal)
-    ticker_label = stock_display_label(ticker, final_state)
+    ticker_label = stock_display_label(ticker, final_state, skip_network=offline)
 
     stats_html = ""
     if elapsed is not None:
@@ -190,9 +196,9 @@ def render_report(
         # Streamlit session the same ticker/date/advice renders instantly and
         # reruns never re-fetch OHLCV over the network.
         @st.cache_data(show_spinner=False, max_entries=64)
-        def _kline_chart(ticker: str, trade_date: str, advice_md: str, rating: str):
+        def _kline_chart(ticker: str, trade_date: str, advice_md: str, rating: str, offline: bool):
             return build_chart_data(
-                ticker, trade_date, advice_md=advice_md, rating=rating
+                ticker, trade_date, advice_md=advice_md, rating=rating, offline=offline
             )
 
         st.markdown("### 📈 K线走势与预测")
@@ -201,6 +207,7 @@ def render_report(
             trade_date,
             exec_advice,
             final_state.get("final_trade_decision", ""),
+            offline,
         )
         if chart is not None:
             render_kline(st, chart)

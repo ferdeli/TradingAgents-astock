@@ -157,3 +157,61 @@ class TestFigure:
 
         fig = _build_figure({"history": [{"index": 0, "open": 1, "high": 2, "low": 0.5, "close": 1.5}], "forecast": [], "rating": "Hold"})
         assert len(fig.data) == 1
+
+
+@pytest.mark.unit
+class TestHistoryDateAndOffline:
+    """fix: K-line hover date + history browsing must never fetch the network."""
+
+    def test_history_records_carry_date(self):
+        chart = kline.build_chart_data(
+            "600519", "2026-07-05", advice_md=ADVICE_MD, rating="Buy", ohlcv_text=CSV
+        )
+        assert chart["history"][0]["date"] == "2026-07-01"
+        assert chart["history"][-1]["date"] == "2026-07-05"
+
+    def test_offline_cache_miss_returns_none_without_network(self, monkeypatch):
+        monkeypatch.setattr(kline, "_kline_cache_dir", lambda: "/nonexistent/kline-cache")
+        # route_to_vendor must NOT be called in offline mode
+        monkeypatch.setattr(
+            kline, "route_to_vendor", lambda *a, **k: pytest.fail("offline mode must not fetch")
+        )
+        chart = kline.build_chart_data(
+            "600519", "2026-07-05", advice_md=ADVICE_MD, rating="Buy", offline=True
+        )
+        assert chart is None
+
+    def test_offline_cache_hit_returns_cached(self, monkeypatch, tmp_path):
+        cache_dir = tmp_path / "kline"
+        monkeypatch.setattr(kline, "_kline_cache_dir", lambda: str(cache_dir))
+        # First build online (populates cache), then offline hit.
+        monkeypatch.setattr(kline, "route_to_vendor", lambda *a, **k: CSV)
+        first = kline.build_chart_data(
+            "600519", "2026-07-05", advice_md=ADVICE_MD, rating="Buy"
+        )
+        assert first is not None
+        # Offline: same cache dir, route_to_vendor must not be called.
+        monkeypatch.setattr(
+            kline, "route_to_vendor", lambda *a, **k: pytest.fail("offline must not fetch")
+        )
+        second = kline.build_chart_data(
+            "600519", "2026-07-05", advice_md=ADVICE_MD, rating="Buy", offline=True
+        )
+        assert second == first
+        assert second["history"][0]["date"] == "2026-07-01"
+
+    def test_figure_hover_date_customdata(self):
+        chart = kline.build_chart_data(
+            "600519", "2026-07-05", advice_md=ADVICE_MD, rating="Buy", ohlcv_text=CSV
+        )
+        from web.components.kline_viewer import _build_figure
+
+        fig = _build_figure(chart)
+        hist_trace = fig.data[0]
+        assert [list(c) for c in hist_trace.customdata] == [[d] for d in ("2026-07-01", "2026-07-02", "2026-07-03", "2026-07-04", "2026-07-05")]
+        assert "%{customdata[0]}" in hist_trace.hovertemplate
+        # Legacy cache without date → falls back to index label.
+        legacy = {"history": [{"index": 0, "open": 1, "high": 2, "low": 0.5, "close": 1.5}],
+                  "forecast": [], "rating": "Hold"}
+        fig2 = _build_figure(legacy)
+        assert [list(c) for c in fig2.data[0].customdata] == [["#0"]]

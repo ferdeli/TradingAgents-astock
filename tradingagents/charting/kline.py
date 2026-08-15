@@ -204,6 +204,7 @@ def build_chart_data(
     forecast_days: int = DEFAULT_FORECAST_DAYS,
     ohlcv_text: Optional[str] = None,
     use_disk_cache: bool = True,
+    offline: bool = False,
 ) -> Optional[dict[str, Any]]:
     """Build the full chart payload ``{ticker, history, forecast, rating}``.
 
@@ -213,11 +214,18 @@ def build_chart_data(
     ticker+date+advice on disk, so rendering a report — including reopening a
     historical one — hits the cache instead of re-fetching OHLCV over the
     network. ``ohlcv_text`` injection bypasses the cache entirely (tests).
+
+    ``offline=True`` (history browsing): the disk cache is the ONLY data
+    source — a cache miss returns None immediately instead of fetching OHLCV
+    over the network, so browsing a historical report never blocks the page
+    on mootdx/sina requests.
     """
     if use_disk_cache and ohlcv_text is None:
         cached = _load_disk_cache(ticker, trade_date, advice_md)
         if cached is not None:
             return cached
+    if offline:
+        return None  # cache miss while browsing history: degrade fast, no network
 
     hist = load_ohlcv(ticker, trade_date, ohlcv_text)
     if hist is None:
@@ -227,6 +235,7 @@ def build_chart_data(
     history = [
         {
             "index": i,
+            "date": str(r["Date"]),
             "open": float(r["Open"]), "high": float(r["High"]),
             "low": float(r["Low"]), "close": float(r["Close"]),
         }

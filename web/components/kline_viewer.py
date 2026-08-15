@@ -22,6 +22,10 @@ def _build_figure(chart_data: dict[str, Any]) -> go.Figure:
     rating = chart_data.get("rating", "")
 
     fig = go.Figure()
+    # Date shown on hover via customdata (x stays an integer index, so history
+    # and forecast axes never mix types). Legacy disk caches without a "date"
+    # field fall back to the candle index.
+    hist_custom = [[h.get("date") or f"#{h['index']}"] for h in hist]
     fig.add_trace(
         go.Candlestick(
             x=[h["index"] for h in hist],
@@ -32,6 +36,12 @@ def _build_figure(chart_data: dict[str, Any]) -> go.Figure:
             name="历史",
             increasing_line_color="#ef4444",   # 红涨
             decreasing_line_color="#22c55e",   # 绿跌
+            customdata=hist_custom,
+            hovertemplate=(
+                "<b>%{customdata[0]}</b><br>"
+                "开 %{open:.2f} 高 %{high:.2f} 低 %{low:.2f} 收 %{close:.2f}"
+                "<extra></extra>"
+            ),
         )
     )
     if forecast:
@@ -48,6 +58,11 @@ def _build_figure(chart_data: dict[str, Any]) -> go.Figure:
                 decreasing_line_color="rgba(34,197,94,0.65)",
                 increasing_fillcolor="rgba(239,68,68,0.25)",
                 decreasing_fillcolor="rgba(34,197,94,0.25)",
+                hovertemplate=(
+                    "<b>预测（示意）</b><br>"
+                    "开 %{open:.2f} 高 %{high:.2f} 低 %{low:.2f} 收 %{close:.2f}"
+                    "<extra></extra>"
+                ),
             )
         )
 

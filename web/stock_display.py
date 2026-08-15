@@ -158,10 +158,17 @@ def _extract_stock_name_from_state(code: str, final_state: dict) -> str | None:
     return None
 
 
-def stock_display_label(ticker: str, final_state: dict | None = None) -> str:
-    """Format a stock as 'code name', falling back to the code when the name is unknown."""
+def stock_display_label(
+    ticker: str, final_state: dict | None = None, skip_network: bool = False
+) -> str:
+    """Format a stock as 'code name', falling back to the code when the name is unknown.
+
+    ``skip_network=True`` (history browsing): the market-wide mootdx name map
+    is NOT consulted — only the saved state's own name is used, so browsing a
+    historical report never blocks on a network fetch.
+    """
     code = _resolve_display_code(ticker)
-    name = resolve_stock_name(code)
+    name = None if skip_network else resolve_stock_name(code)
 
     if not name and final_state:
         name = _extract_stock_name_from_state(code, final_state)
