@@ -241,64 +241,106 @@ def _advance_batch(*, failed: bool = False) -> None:
         batch["done"] = True
 
 
-def _render_batch_results() -> None:
-    """Render per-ticker tabs for the completed results of a batch."""
-    batch = st.session_state.get("batch")
-    if not batch or not batch.get("results"):
-        return
-    done_tickers = [t for t in batch["tickers"] if t in batch["results"]]
-    if not done_tickers:
-        return
-    if not batch.get("done"):
-        idx = batch["index"]
-        status = (
-            f"，正在分析 {batch['tickers'][idx]}"
-            if idx < len(batch["tickers"]) else ""
-        )
-        st.info(f"⏳ 批量进度：已完成 {len(batch['results'])}/{len(batch['tickers'])}{status}")
-    elif batch.get("interrupted"):
-        st.warning("已停止：仅展示已完成标的的分析结果。")
-    tabs = st.tabs([f"📈 {t}" for t in done_tickers])
-    for tab, t in zip(tabs, done_tickers):
-        with tab:
-            r = batch["results"][t]
-            if r.get("error"):
-                st.error(f"分析失败: {r['error']}")
-            else:
-                render_report(r["final_state"], t, r["trade_date"], r["signal"], offline=True)
+_SIGNAL_COLORS = {
+    "BUY": "#ef4444",
+    "OVERWEIGHT": "#ef4444",
+    "HOLD": "#f59e0b",
+    "UNDERWEIGHT": "#22c55e",
+    "SELL": "#22c55e",
+}
 
 
-def _render_batch_progress(tracker) -> None:
-    """Per-ticker tabs WHILE the batch runs: the current ticker shows its live
-    progress panel, finished tickers show their results, pending ones wait.
+def _render_task_cell(batch: dict, ticker: str, idx: int, title: str) -> None:
+    """Render one grid cell of the task panel (cover + status + action)."""
+    is_current = (
+        idx == batch["index"] and not batch.get("done") and not batch.get("interrupted")
+    )
+    result = batch["results"].get(ticker)
+    with st.container(border=True):
+        if result and not result.get("error"):
+            # 封面：K线缩略图（offline 从本地缓存重建，零网络）
+            try:
+                from tradingagents.charting.kline import build_chart_data
+                from web.components.kline_viewer import render_kline_thumbnail
 
-    Keeps every ticker's output on its own tab so a multi-ticker run stays
-    readable. Results inside the progress view render offline (cache-only) so
-    a rerun never blocks on network fetches; the full report is available
-    from the final results tabs once the batch finishes.
-    """
-    batch = st.session_state["batch"]
-    labels: list[str] = []
-    for i, t in enumerate(batch["tickers"]):
-        if t in batch["results"]:
-            labels.append(f"✅ {t}")
-        elif i == batch["index"]:
-            labels.append(f"⏳ {t}")
+                fs = result["final_state"]
+                chart = build_chart_data(
+                    ticker, result["trade_date"],
+                    advice_md=fs.get("execution_advice", ""),
+                    rating=fs.get("final_trade_decision", ""),
+                    offline=True,
+                )
+                if chart:
+                    render_kline_thumbnail(st, chart)
+            except Exception:  # noqa: BLE001 — cover degrades to text
+                pass
+            st.markdown(f"**{title}**")
+            signal = str(result.get("signal", "")).upper()
+            color = _SIGNAL_COLORS.get(signal, "#9ca3af")
+            st.markdown(
+                f"<div style='text-align:right;color:{color};font-weight:700'>"
+                f"操作建议 {signal}</div>",
+                unsafe_allow_html=True,
+            )
+        elif result and result.get("error"):
+            st.markdown(f"**{title}**")
+            st.error("失败")
+        elif is_current:
+            st.markdown(f"**{title}**")
+            st.markdown("⏳ 分析中…")
+            st.progress(0.6, text="进行中")
         else:
-            labels.append(f"⏸ {t}")
-    tabs = st.tabs(labels)
-    for i, (tab, t) in enumerate(zip(tabs, batch["tickers"])):
-        with tab:
-            if t in batch["results"]:
-                r = batch["results"][t]
-                if r.get("error"):
-                    st.error(f"分析失败: {r['error']}")
-                else:
-                    render_report(r["final_state"], t, r["trade_date"], r["signal"], offline=True)
-            elif i == batch["index"]:
-                render_progress(tracker)
-            else:
-                st.caption("⏸ 等待分析…")
+            st.markdown(f"**{title}**")
+            st.caption(f"{ticker} · 等待分析")
+        if st.button("进入任务", key=f"open_{ticker}", use_container_width=True):
+            st.session_state["active_task"] = ticker
+            st.rerun()
+
+
+def _render_batch_board() -> None:
+    """Grid-panel view of all batch tasks (cell per ticker, 3 per row)."""
+    batch = st.session_state["batch"]
+    titles = batch.get("titles") or {}
+    n = len(batch["tickers"])
+    done = len(batch["results"])
+    st.subheader("📋 分析任务面板")
+    if batch.get("done"):
+        st.caption(f"共 {n} 个任务，全部结束（成功 {done - sum(1 for r in batch['results'].values() if r.get('error'))}，"
+                   f"失败 {sum(1 for r in batch['results'].values() if r.get('error'))}）")
+    elif batch.get("interrupted"):
+        st.caption(f"已停止：已完成 {done}/{n} 个任务")
+    else:
+        st.caption(f"共 {n} 个任务，已完成 {done}，正在分析 {batch['tickers'][batch['index']]}")
+
+    row_cols = st.columns(3)
+    for i, t in enumerate(batch["tickers"]):
+        if i % 3 == 0:
+            row_cols = st.columns(3)
+        with row_cols[i % 3]:
+            _render_task_cell(batch, t, i, titles.get(t, t))
+
+
+def _render_task_detail(ticker: str) -> None:
+    """Detail view for one task (progress or full report) with a back button."""
+    batch = st.session_state["batch"]
+    titles = batch.get("titles") or {}
+    if st.button("← 返回任务面板", key="back_to_board", use_container_width=False):
+        st.session_state.pop("active_task", None)
+        st.rerun()
+    st.subheader(f"{titles.get(ticker, ticker)}")
+    result = batch["results"].get(ticker)
+    if result:
+        if result.get("error"):
+            st.error(f"分析失败: {result['error']}")
+        else:
+            render_report(
+                result["final_state"], ticker, result["trade_date"],
+                result["signal"], offline=True,
+            )
+    elif batch["index"] < len(batch["tickers"]) and batch["tickers"][batch["index"]] == ticker:
+        render_progress(st.session_state.get("tracker"))
+    else:
+        st.caption("⏸ 等待分析…")
 
 
 # ── Sidebar ──────────────────────────────────────────────────────────────────
@@ -319,6 +361,7 @@ if start_req:
         "trade_date": trade_date,
         "config": _build_config(),
         "holdings_map": start_req.get("holdings_map", {}),  # ticker -> {quantity, cost_price}
+        "titles": start_req.get("titles_map", {}),          # ticker -> custom title
         "results": {},          # ticker -> {final_state, signal, trade_date, error?}
         "done": False,
         "interrupted": False,
@@ -345,33 +388,49 @@ if viewing_history:
         render_report(state, ticker, trade_date, signal, offline=True)
     except Exception as exc:
         st.error(f"加载失败: {exc}")
+        ticker = trade_date = None
 
-# Batch mode: stopped current ticker → interrupt the whole batch
-elif batch and tracker and tracker.stop_requested:
-    batch["interrupted"] = True
-    batch["done"] = True
-    st.session_state["tracker"] = None
-    st.rerun()
+    # 历史 → 新任务：预填表单供二次编辑后执行；历史记录本身只读不受影响。
+    if ticker:
+        if st.button("🔄 基于此记录生成新任务（预填表单，不修改历史）"):
+            from datetime import date as _date
 
-# Batch mode: analysis running → per-ticker tabs (current shows live progress)
-elif batch and tracker and tracker.is_running:
-    _render_batch_progress(tracker)
-    time.sleep(2)
-    st.rerun()
+            st.session_state["ticker_row_0"] = ticker
+            st.session_state["task_title_0"] = f"{ticker} 复分析"
+            try:
+                st.session_state["input_date"] = _date.fromisoformat(trade_date)
+            except ValueError:
+                pass
+            st.session_state["ticker_count"] = 1
+            st.session_state["viewing_history"] = None
+            st.session_state["batch"] = None
+            st.session_state.pop("active_task", None)
+            st.rerun()
 
-# Batch mode: current ticker finished → advance to next / done
-elif batch and tracker and tracker.is_complete:
-    _advance_batch()
-    st.rerun()
-
-# Batch mode: current ticker errored → skip it and continue the batch
-elif batch and tracker and tracker.error:
-    _advance_batch(failed=True)
-    st.rerun()
-
-# Batch mode: done (or interrupted) → render all results in tabs
-elif batch and batch.get("done"):
-    _render_batch_results()
+# Batch mode
+elif batch:
+    active_task = st.session_state.get("active_task")
+    if active_task:
+        # Detail view for one task (progress or full report) + back button
+        _render_task_detail(active_task)
+    elif tracker and tracker.stop_requested:
+        batch["interrupted"] = True
+        batch["done"] = True
+        st.session_state["tracker"] = None
+        st.rerun()
+    elif tracker and tracker.is_running:
+        _render_batch_board()
+        time.sleep(2)
+        st.rerun()
+    elif tracker and tracker.is_complete:
+        _advance_batch()
+        st.rerun()
+    elif tracker and tracker.error:
+        _advance_batch(failed=True)
+        st.rerun()
+    else:
+        # done / interrupted → grid panel of all results
+        _render_batch_board()
 
 # State 2: Analysis running (single ticker, no batch)
 elif tracker and tracker.is_running:

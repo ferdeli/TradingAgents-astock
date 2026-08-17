@@ -83,3 +83,20 @@ def render_kline(st, chart_data: dict[str, Any]) -> None:
     st.plotly_chart(fig, use_container_width=True)
     if chart_data.get("forecast"):
         st.caption("⚠️ 虚线区为基于评级与目标/止损位生成的示意性预测，仅供研究参考，非真实行情。")
+
+
+def render_kline_thumbnail(st, chart_data: dict[str, Any], height: int = 110) -> None:
+    """Render a small, static K-line cover for a task panel cell."""
+    fig = _build_figure(chart_data)
+    fig.update_layout(
+        height=height,
+        showlegend=False,
+        margin=dict(l=2, r=2, t=6, b=2),
+        xaxis=dict(visible=False),
+        yaxis=dict(visible=False),
+        hovermode=False,
+    )
+    st.plotly_chart(
+        fig, use_container_width=True,
+        config={"displayModeBar": False, "staticPlot": True},
+    )

@@ -272,7 +272,7 @@ def render_sidebar() -> None:
 
     def _remove_ticker_row(idx: int) -> None:
         n = st.session_state.get("ticker_count", 1)
-        keys = ("ticker_row_", "holding_cost_", "holding_qty_")
+        keys = ("ticker_row_", "holding_cost_", "holding_qty_", "task_title_")
         vals = {k: [st.session_state.get(f"{k}{j}", "") for j in range(n)] for k in keys}
         for k in keys:
             vals[k].pop(idx)
@@ -291,7 +291,23 @@ def render_sidebar() -> None:
 
     ticker_inputs: list[str] = []
     for i in range(ticker_count):
-        c_t, c_p, c_q, c_x = st.columns([4, 2, 2, 1])
+        # 行 1：任务标题（可选）+ 删除
+        c_title, c_x = st.columns([5, 1])
+        with c_title:
+            st.text_input(
+                f"任务标题 {i+1}",
+                placeholder="任务标题（可选，面板与详情显示）",
+                key=f"task_title_{i}",
+                label_visibility="collapsed",
+            )
+        with c_x:
+            st.write("")
+            st.button(
+                "✖", key=f"remove_row_{i}", disabled=ticker_count <= 1,
+                on_click=_remove_ticker_row, args=(i,), use_container_width=True,
+            )
+        # 行 2：标的 + 持仓均价 + 持仓总量
+        c_t, c_p, c_q = st.columns([4, 2, 2])
         with c_t:
             val = st.text_input(
                 f"标的 {i+1}",
@@ -311,12 +327,6 @@ def render_sidebar() -> None:
                 f"总量{i}", min_value=0, step=100, value=0,
                 key=f"holding_qty_{i}", label_visibility="collapsed",
                 help="该标的持仓总量（股）",
-            )
-        with c_x:
-            st.write("")
-            st.button(
-                "✖", key=f"remove_row_{i}", disabled=ticker_count <= 1,
-                on_click=_remove_ticker_row, args=(i,), use_container_width=True,
             )
         if val and val.strip():
             ticker_inputs.append(val.strip())
@@ -359,6 +369,7 @@ def render_sidebar() -> None:
         resolved: list[str] = []
         errors: list[str] = []
         holdings_map: dict[str, dict] = {}
+        titles_map: dict[str, str] = {}
         for i in range(ticker_count):
             raw = st.session_state.get(f"ticker_row_{i}", "")
             if not raw or not raw.strip():
@@ -373,6 +384,9 @@ def render_sidebar() -> None:
             if cost > 0:
                 qty = int(st.session_state.get(f"holding_qty_{i}", 0) or 0)
                 holdings_map[code] = {"quantity": qty, "cost_price": cost}
+            # 自定义任务标题（可空 → 用代码）
+            title = str(st.session_state.get(f"task_title_{i}", "") or "").strip()
+            titles_map[code] = title or code
         if errors:
             st.error("❌ " + "；".join(errors))
         elif resolved:
@@ -380,6 +394,7 @@ def render_sidebar() -> None:
                 "tickers": resolved,
                 "trade_date": trade_date.strftime("%Y-%m-%d"),
                 "holdings_map": holdings_map,
+                "titles_map": titles_map,
                 "fresh": True,
             }
             st.session_state["viewing_history"] = None
