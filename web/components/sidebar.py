@@ -289,26 +289,32 @@ def _render_history_calendar() -> None:
 
     html = f"""
     <style>
+    /* Self-contained dark card: the components iframe background is
+       transparent, and the iframe's default text color is black — so the
+       calendar must carry its own opaque background + explicit colors on
+       EVERY element, never relying on inheritance. */
     .cal {{ font-family: -apple-system, 'PingFang SC', sans-serif; font-size: 13px;
-      color: #e8e4dd; }}
+      background: #1b1b1f; border: 1px solid #3a3631; border-radius: 10px;
+      padding: 8px 6px; }}
+    .cal, .cal td, .cal th, .cal b, .cal .legend {{ color: #e8e4dd; }}
     .cal table {{ width: 100%; border-collapse: separate; border-spacing: 2px;
       text-align: center; }}
     .cal th {{ color: #9a958e; font-weight: 500; padding: 2px 0; font-size: 12px; }}
     .cal th.weekend {{ color: #7d776f; }}
     .cal td {{ padding: 6px 2px; cursor: pointer; border-radius: 8px;
-      background: rgba(255,255,255,0.03); color: #e8e4dd; position: relative; }}
-    .cal td:hover {{ background: rgba(255,255,255,0.10); }}
+      background: rgba(255,255,255,0.04); color: #e8e4dd; position: relative; }}
+    .cal td:hover {{ background: rgba(255,255,255,0.12); }}
     .cal td.today {{ box-shadow: inset 0 0 0 1px #ff5a1f; }}
     .cal td.sel {{ background: #ff5a1f; color: #fff; font-weight: 700; }}
-    .cal td.sel .bdg {{ background: rgba(255,255,255,0.9); color: #ff5a1f; }}
+    .cal td.sel .bdg {{ background: #ffffff; color: #ff5a1f; }}
     .cal .bdg {{ display: inline-block; min-width: 15px; height: 15px; line-height: 15px;
       background: #ff5a1f; color: #fff; border-radius: 8px; font-size: 10px;
       font-weight: 600; padding: 0 3px; margin-left: 2px; }}
     .cal .nav {{ display: flex; justify-content: space-between; align-items: center;
-      margin-bottom: 6px; color: #f5f1eb; }}
-    .cal .nav button {{ background: rgba(255,255,255,0.06); border: 1px solid #3a3631;
-      color: #f5f1eb; border-radius: 6px; cursor: pointer; padding: 1px 8px; }}
-    .cal .nav button:hover {{ background: rgba(255,255,255,0.12); }}
+      margin-bottom: 6px; }}
+    .cal .nav button {{ background: rgba(255,255,255,0.08); border: 1px solid #44403a;
+      color: #e8e4dd; border-radius: 6px; cursor: pointer; padding: 1px 8px; }}
+    .cal .nav button:hover {{ background: rgba(255,255,255,0.15); }}
     .cal .legend {{ margin-top: 4px; font-size: 11px; color: #9a958e; }}
     </style>
     <div class="cal">
