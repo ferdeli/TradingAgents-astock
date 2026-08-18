@@ -82,6 +82,63 @@ def get_batch(batch_id: str) -> list[dict[str, str]]:
     return [e for e in get_history() if e.get("batch_id") == batch_id]
 
 
+def group_history(entries: list[dict]) -> list[dict]:
+    """Group history entries into display items: multi-ticker batches collapse
+    into one item, single-ticker entries stay as-is.
+
+    Returns items with: kind (batch|single), key, date, title, plus batch
+    fields (batch_id/entries) or single fields (path/ticker/name).
+    """
+    batches: dict[str, list] = {}
+    singles: list = []
+    for e in entries:
+        if e.get("batch_id"):
+            batches.setdefault(e["batch_id"], []).append(e)
+        else:
+            singles.append(e)
+
+    display: list[dict] = []
+    for bid, batch_entries in batches.items():
+        display.append({
+            "kind": "batch", "key": bid, "batch_id": bid, "entries": batch_entries,
+            "date": max(e["date"] for e in batch_entries),
+            "title": next((e["title"] for e in batch_entries if e.get("title")), ""),
+        })
+    for e in singles:
+        display.append({
+            "kind": "single",
+            "key": f"{e['ticker']}_{e['date']}_{abs(hash(e['path']))}",
+            "path": e["path"], "ticker": e["ticker"], "date": e["date"],
+            "title": e.get("title", ""), "name": e.get("name", ""),
+        })
+    display.sort(key=lambda x: x["date"], reverse=True)
+    return display
+
+
+def history_label(item: dict) -> str:
+    """Human label for a history item (single or batch), per the display rules:
+
+    - unnamed single ticker: 「名称（代码）· 日期」 (name from the log, code only when unknown)
+    - unnamed batch:        「批量分析 · N 个标的 · 日期」
+    - custom title wins over both.
+    """
+    if item["kind"] == "batch":
+        n = len(item["entries"])
+        return (item["title"] or f"批量分析 · {n} 个标的") + f" · {item['date']}"
+    if item["title"]:
+        return f"{item['title']} · {item['date']}"
+    if item["name"]:
+        return f"{item['name']}（{item['ticker']}）· {item['date']}"
+    return f"{item['ticker']} · {item['date']}"
+
+
+def count_tasks_on(day: str) -> int:
+    """Number of analysed tickers on a given day (batch members count as tasks)."""
+    return sum(
+        1 for e in get_history() if e["date"] == day
+    )
+
+
 def set_log_title(path: str, title: str) -> None:
     """Persist a user-edited title into a saved state log.
 

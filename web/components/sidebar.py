@@ -1,7 +1,8 @@
-"""Sidebar: stock input, LLM config, and history list."""
+"""Sidebar: stock input, LLM config, and history calendar."""
 
 from __future__ import annotations
 
+import calendar as _cal
 import os
 from datetime import date
 
@@ -245,6 +246,93 @@ def _render_llm_config() -> None:
             )
 
 
+def _render_history_calendar() -> None:
+    """Monthly calendar of analysis history: days with tasks show a badge with
+    the task count; clicking a day selects it (the day's task list opens in
+    the main area); ◀▶ navigate months.
+    """
+    from web.history import count_tasks_on
+
+    today = date.today()
+    y, m = st.session_state.get("cal_ym") or (today.year, today.month)
+
+    # Task counts for every day of the shown month
+    counts: dict[str, int] = {}
+    first = date(y, m, 1)
+    nxt = date(y + 1, 1, 1) if m == 12 else date(y, m + 1, 1)
+    d = first
+    while d < nxt:
+        cnt = count_tasks_on(d.strftime("%Y-%m-%d"))
+        if cnt:
+            counts[d.strftime("%Y-%m-%d")] = cnt
+        d += _timedelta_days(1)
+
+    weeks = _cal.Calendar(firstweekday=0).monthdayscalendar(y, m)
+    rows = []
+    for week in weeks:
+        tds = []
+        for day in week:
+            if not day:
+                tds.append("<td></td>")
+                continue
+            key = f"{y}-{m:02d}-{day:02d}"
+            badge = f"<span class='bdg'>{counts[key]}</span>" if key in counts else ""
+            tds.append(f"<td onclick='pick(\"{key}\")'>{day}{badge}</td>")
+        rows.append(f"<tr>{''.join(tds)}</tr>")
+
+    html = f"""
+    <style>
+    .cal {{ font-family: sans-serif; font-size: 13px; }}
+    .cal table {{ width: 100%; border-collapse: collapse; text-align: center; }}
+    .cal th {{ color: #888; font-weight: normal; padding: 2px; }}
+    .cal td {{ padding: 5px 2px; cursor: pointer; border-radius: 4px; position: relative; }}
+    .cal td:hover {{ background: #2a2a2e; }}
+    .cal .bdg {{ display: inline-block; min-width: 14px; height: 14px; line-height: 14px;
+      background: #ff5a1f; color: #fff; border-radius: 8px; font-size: 10px;
+      padding: 0 3px; margin-left: 2px; }}
+    .cal .nav {{ display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 4px; }}
+    .cal .nav button {{ background: none; border: 1px solid #444; color: #f5f1eb;
+      border-radius: 4px; cursor: pointer; padding: 0 6px; }}
+    </style>
+    <div class="cal">
+      <div class="nav"><button onclick="nav(-1)">◀</button>
+        <b>{y}年{m}月</b><button onclick="nav(1)">▶</button></div>
+      <table><tr><th>一</th><th>二</th><th>三</th><th>四</th><th>五</th><th>六</th><th>日</th></tr>
+      {''.join(rows)}
+      </table>
+    </div>
+    <script>
+    function pick(d) {{ Streamlit.setComponentValue('day:' + d); }}
+    function nav(delta) {{ Streamlit.setComponentValue(delta > 0 ? 'next' : 'prev'); }}
+    </script>
+    """
+    value = st.components.v1.html(html, height=270)
+    if not isinstance(value, str) or not value:
+        return  # bare-import / no-run environments return non-str placeholders
+    if value == "next":
+        m2 = m + 1
+        st.session_state["cal_ym"] = (y + (m2 - 1) // 12, (m2 - 1) % 12 + 1)
+        st.rerun()
+    elif value == "prev":
+        m2 = m - 1
+        st.session_state["cal_ym"] = (y + (m2 - 1) // 12, (m2 - 1) % 12 + 1)
+        st.rerun()
+    elif value.startswith("day:"):
+        st.session_state["cal_date"] = value[4:]
+        st.session_state["history_board"] = None
+        st.session_state.pop("active_task", None)
+        st.session_state["viewing_history"] = None
+        st.session_state["viewing_batch"] = None
+        st.session_state["start_analysis"] = None
+        st.rerun()
+
+
+def _timedelta_days(n: int):
+    from datetime import timedelta
+    return timedelta(days=n)
+
+
 def render_sidebar() -> None:
     """Render the sidebar with input controls and history."""
 
@@ -432,76 +520,9 @@ def render_sidebar() -> None:
                 st.session_state["viewing_history"] = None
 
     st.markdown("---")
-    st.markdown("#### 历史记录")
+    st.markdown("#### 历史记录（日历）")
 
-    history = get_history()
-    if not history:
-        st.caption("暂无历史记录")
-        return
-
-    # 按 batch_id 分组：同一次多标的分析合并为一条记录
-    batches: dict[str, list] = {}
-    singles: list = []
-    for e in history:
-        if e.get("batch_id"):
-            batches.setdefault(e["batch_id"], []).append(e)
-        else:
-            singles.append(e)
-
-    display: list[dict] = []
-    for bid, entries in batches.items():
-        display.append({
-            "kind": "batch", "key": bid, "batch_id": bid, "entries": entries,
-            "date": max(e["date"] for e in entries),
-            "title": next((e["title"] for e in entries if e.get("title")), ""),
-        })
-    for e in singles:
-        display.append({
-            "kind": "single", "key": f"{e['ticker']}_{e['date']}_{abs(hash(e['path']))}",
-            "path": e["path"], "ticker": e["ticker"], "date": e["date"],
-            "title": e.get("title", ""), "name": e.get("name", ""),
-        })
-    display.sort(key=lambda x: x["date"], reverse=True)
-
-    from web.history import set_log_title
-
-    for item in display[:20]:
-        if item["kind"] == "batch":
-            n = len(item["entries"])
-            label = (item["title"] or f"批量分析 · {n} 个标的") + f" · {item['date']}"
-        else:
-            if item["title"]:
-                label = f"{item['title']} · {item['date']}"
-            elif item["name"]:
-                label = f"{item['name']}（{item['ticker']}）· {item['date']}"
-            else:
-                label = f"{item['ticker']} · {item['date']}"
-        c1, c2 = st.columns([6, 1])
-        with c1:
-            if st.button(label, key=f"hist_{item['key']}", use_container_width=True):
-                if item["kind"] == "batch":
-                    st.session_state["viewing_batch"] = item["batch_id"]
-                    st.session_state["viewing_history"] = None
-                else:
-                    st.session_state["viewing_history"] = item["path"]
-                    st.session_state["viewing_batch"] = None
-                st.session_state["start_analysis"] = None
-        with c2:
-            if st.button("✎", key=f"edit_{item['key']}", use_container_width=True):
-                st.session_state["editing_hist"] = item["key"]
-                st.rerun()
-        if st.session_state.get("editing_hist") == item["key"]:
-            new_title = st.text_input(
-                "新标题", value=item.get("title", ""), key=f"title_input_{item['key']}"
-            )
-            if st.button("保存", key=f"save_{item['key']}"):
-                if item["kind"] == "batch":
-                    for e in item["entries"]:
-                        set_log_title(e["path"], new_title)
-                else:
-                    set_log_title(item["path"], new_title)
-                st.session_state["editing_hist"] = None
-                st.rerun()
+    _render_history_calendar()
 
     st.markdown("---")
     st.caption("⚠️ 仅供学习研究，不构成投资建议")

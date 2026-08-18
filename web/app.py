@@ -309,9 +309,11 @@ def _render_task_cell(batch: dict, ticker: str, idx: int, title: str) -> None:
             st.rerun()
 
 
-def _render_batch_board() -> None:
+def _render_batch_board(batch: dict | None = None) -> None:
     """Grid-panel view of all batch tasks (cell per ticker, 3 per row)."""
-    batch = st.session_state["batch"]
+    batch = batch or st.session_state.get("batch")
+    if not batch:
+        return
     titles = batch.get("titles") or {}
     n = len(batch["tickers"])
     done = len(batch["results"])
@@ -332,9 +334,11 @@ def _render_batch_board() -> None:
             _render_task_cell(batch, t, i, titles.get(t, t))
 
 
-def _render_task_detail(ticker: str) -> None:
+def _render_task_detail(ticker: str, batch: dict | None = None) -> None:
     """Detail view for one task (progress or full report) with a back button."""
-    batch = st.session_state["batch"]
+    batch = batch or st.session_state.get("batch")
+    if not batch:
+        return
     titles = batch.get("titles") or {}
     if st.button("← 返回任务面板", key="back_to_board", use_container_width=False):
         st.session_state.pop("active_task", None)
@@ -382,12 +386,76 @@ if start_req:
     _start_batch_current()
 
 
+def _static_batch(item: dict) -> dict:
+    """Reconstruct a read-only batch dict from history for the board view."""
+    entries = item["entries"] if item["kind"] == "batch" else [item]
+    tickers: list[str] = []
+    results: dict = {}
+    titles: dict = {}
+    for e in entries:
+        state = load_analysis(e["path"])
+        tickers.append(e["ticker"])
+        titles[e["ticker"]] = e.get("title") or e["ticker"]
+        results[e["ticker"]] = {
+            "final_state": state,
+            "signal": extract_signal(state),
+            "trade_date": e["date"],
+            "error": None,
+        }
+    return {
+        "tickers": tickers,
+        "index": len(tickers),
+        "done": True,
+        "interrupted": False,
+        "titles": titles,
+        "results": results,
+        "trade_date": entries[0]["date"] if entries else "",
+    }
+
+
+def _render_day_tasks(day: str) -> None:
+    """Task list for a calendar-selected day; clicking opens the board view."""
+    from web.history import get_history, group_history, history_label
+
+    st.subheader(f"📅 {day} 的任务")
+    items = group_history([e for e in get_history() if e["date"] == day])
+    if not items:
+        st.caption("当日无分析记录")
+    else:
+        for it in items:
+            if st.button(history_label(it), key=f"daytask_{it['key']}", use_container_width=True):
+                st.session_state["history_board"] = _static_batch(it)
+                st.session_state.pop("active_task", None)
+                st.rerun()
+    if st.button("关闭日历选择", key="close_cal_date"):
+        st.session_state.pop("cal_date", None)
+        st.rerun()
+
+
 # ── Main area state machine ─────────────────────────────────────────────────
 
 tracker: ProgressTracker | None = st.session_state.get("tracker")
 viewing_history: str | None = st.session_state.get("viewing_history")
 viewing_batch: str | None = st.session_state.get("viewing_batch")
+history_board: dict | None = st.session_state.get("history_board")
+cal_date: str | None = st.session_state.get("cal_date")
 batch = st.session_state.get("batch")
+
+# State 0.6: History board view (grid panel rebuilt from saved logs)
+if history_board:
+    if st.button("← 返回任务列表", key="back_history_board"):
+        st.session_state.pop("history_board", None)
+        st.session_state.pop("active_task", None)
+        st.rerun()
+    active_task = st.session_state.get("active_task")
+    if active_task:
+        _render_task_detail(active_task, history_board)
+    else:
+        _render_batch_board(history_board)
+
+# State 0.55: Calendar-selected day → task list → click opens the board
+elif cal_date:
+    _render_day_tasks(cal_date)
 
 # State 0.5: Viewing a multi-ticker batch (all tickers of one analysis)
 if viewing_batch:
