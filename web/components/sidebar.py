@@ -255,6 +255,8 @@ def _render_history_calendar() -> None:
 
     today = date.today()
     y, m = st.session_state.get("cal_ym") or (today.year, today.month)
+    selected = st.session_state.get("cal_date") or ""
+    today_key = today.strftime("%Y-%m-%d")
 
     # Task counts for every day of the shown month
     counts: dict[str, int] = {}
@@ -276,31 +278,47 @@ def _render_history_calendar() -> None:
                 tds.append("<td></td>")
                 continue
             key = f"{y}-{m:02d}-{day:02d}"
+            cls = ""
+            if key == today_key:
+                cls += " today"
+            if key == selected:
+                cls += " sel"
             badge = f"<span class='bdg'>{counts[key]}</span>" if key in counts else ""
-            tds.append(f"<td onclick='pick(\"{key}\")'>{day}{badge}</td>")
+            tds.append(f"<td class='{cls.strip()}' onclick='pick(\"{key}\")'>{day}{badge}</td>")
         rows.append(f"<tr>{''.join(tds)}</tr>")
 
     html = f"""
     <style>
-    .cal {{ font-family: sans-serif; font-size: 13px; }}
-    .cal table {{ width: 100%; border-collapse: collapse; text-align: center; }}
-    .cal th {{ color: #888; font-weight: normal; padding: 2px; }}
-    .cal td {{ padding: 5px 2px; cursor: pointer; border-radius: 4px; position: relative; }}
-    .cal td:hover {{ background: #2a2a2e; }}
-    .cal .bdg {{ display: inline-block; min-width: 14px; height: 14px; line-height: 14px;
+    .cal {{ font-family: -apple-system, 'PingFang SC', sans-serif; font-size: 13px;
+      color: #e8e4dd; }}
+    .cal table {{ width: 100%; border-collapse: separate; border-spacing: 2px;
+      text-align: center; }}
+    .cal th {{ color: #9a958e; font-weight: 500; padding: 2px 0; font-size: 12px; }}
+    .cal th.weekend {{ color: #7d776f; }}
+    .cal td {{ padding: 6px 2px; cursor: pointer; border-radius: 8px;
+      background: rgba(255,255,255,0.03); color: #e8e4dd; position: relative; }}
+    .cal td:hover {{ background: rgba(255,255,255,0.10); }}
+    .cal td.today {{ box-shadow: inset 0 0 0 1px #ff5a1f; }}
+    .cal td.sel {{ background: #ff5a1f; color: #fff; font-weight: 700; }}
+    .cal td.sel .bdg {{ background: rgba(255,255,255,0.9); color: #ff5a1f; }}
+    .cal .bdg {{ display: inline-block; min-width: 15px; height: 15px; line-height: 15px;
       background: #ff5a1f; color: #fff; border-radius: 8px; font-size: 10px;
-      padding: 0 3px; margin-left: 2px; }}
+      font-weight: 600; padding: 0 3px; margin-left: 2px; }}
     .cal .nav {{ display: flex; justify-content: space-between; align-items: center;
-      margin-bottom: 4px; }}
-    .cal .nav button {{ background: none; border: 1px solid #444; color: #f5f1eb;
-      border-radius: 4px; cursor: pointer; padding: 0 6px; }}
+      margin-bottom: 6px; color: #f5f1eb; }}
+    .cal .nav button {{ background: rgba(255,255,255,0.06); border: 1px solid #3a3631;
+      color: #f5f1eb; border-radius: 6px; cursor: pointer; padding: 1px 8px; }}
+    .cal .nav button:hover {{ background: rgba(255,255,255,0.12); }}
+    .cal .legend {{ margin-top: 4px; font-size: 11px; color: #9a958e; }}
     </style>
     <div class="cal">
       <div class="nav"><button onclick="nav(-1)">◀</button>
         <b>{y}年{m}月</b><button onclick="nav(1)">▶</button></div>
-      <table><tr><th>一</th><th>二</th><th>三</th><th>四</th><th>五</th><th>六</th><th>日</th></tr>
+      <table><tr><th>一</th><th>二</th><th>三</th><th>四</th><th>五</th>
+        <th class="weekend">六</th><th class="weekend">日</th></tr>
       {''.join(rows)}
       </table>
+      <div class="legend">橙色 = 当日任务数 · 橙底 = 已选中 · 描边 = 今天</div>
     </div>
     <script>
     function pick(d) {{ Streamlit.setComponentValue('day:' + d); }}
