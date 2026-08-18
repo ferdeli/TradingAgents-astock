@@ -247,37 +247,45 @@ def _render_llm_config() -> None:
 
 
 def _render_history_calendar() -> None:
-    """History calendar.
+    """History calendar built from native st.button widgets.
 
-    Interaction is driven by a native ``st.date_input`` (year/month switching
-    and day picking are built in and immediately trigger a rerun). The HTML
-    month grid below is a *display* of the picked month: task-count badges,
-    today highlight and the selected day — clickable HTML callbacks are not
-    reliable here (st.components values are only read on the next rerun), so
-    day/month selection lives in the date_input.
+    Month navigation (◀/▶) and day picking are Streamlit buttons, so every
+    click immediately reruns and works reliably (HTML-component callbacks do
+    not trigger reruns, which is why the earlier approach could not switch
+    months). Days with tasks show the count next to the day number; the
+    selected day renders as a primary button. Below the grid, the selected
+    day's task list is rendered in the classic list style.
     """
-    from web.history import count_tasks_on
+    from web.history import (
+        count_tasks_on,
+        get_history,
+        group_history,
+        history_label,
+        set_log_title,
+        static_batch_from_item,
+    )
 
     today = date.today()
-    picked = st.date_input(
-        "选择日期（点标题可切换年/月）",
-        value=today,
-        key="cal_pick_date",
-        help="点击后立即在右侧显示该日任务列表",
-    )
-    # date_input 交互自带 rerun；同步到主区状态
-    if st.session_state.get("cal_date") != picked.isoformat():
-        st.session_state["cal_date"] = picked.isoformat()
-        st.session_state["history_board"] = None
-        st.session_state.pop("active_task", None)
-        st.session_state["viewing_history"] = None
-        st.session_state["viewing_batch"] = None
+    y, m = st.session_state.get("cal_ym") or (today.year, today.month)
 
-    y, m = picked.year, picked.month
-    selected = picked.isoformat()
-    today_key = today.strftime("%Y-%m-%d")
+    nav = st.columns([1, 2, 1])
+    with nav[0]:
+        if st.button("◀", key="cal_prev", use_container_width=True):
+            m2 = m - 1
+            st.session_state["cal_ym"] = (y + (m2 - 1) // 12, (m2 - 1) % 12 + 1)
+            st.rerun()
+    with nav[1]:
+        st.markdown(
+            f"<div style='text-align:center; font-weight:600; padding-top:2px;'>{y}年{m}月</div>",
+            unsafe_allow_html=True,
+        )
+    with nav[2]:
+        if st.button("▶", key="cal_next", use_container_width=True):
+            m2 = m + 1
+            st.session_state["cal_ym"] = (y + (m2 - 1) // 12, (m2 - 1) % 12 + 1)
+            st.rerun()
 
-    # Task counts for every day of the shown month
+    # Task counts per day of the shown month
     counts: dict[str, int] = {}
     first = date(y, m, 1)
     nxt = date(y + 1, 1, 1) if m == 12 else date(y, m + 1, 1)
@@ -288,58 +296,70 @@ def _render_history_calendar() -> None:
             counts[d.strftime("%Y-%m-%d")] = cnt
         d += _timedelta_days(1)
 
-    weeks = _cal.Calendar(firstweekday=0).monthdayscalendar(y, m)
-    rows = []
-    for week in weeks:
-        tds = []
-        for day in week:
-            if not day:
-                tds.append("<td></td>")
-                continue
-            key = f"{y}-{m:02d}-{day:02d}"
-            cls = ""
-            if key == today_key:
-                cls += " today"
-            if key == selected:
-                cls += " sel"
-            badge = f"<span class='bdg'>{counts[key]}</span>" if key in counts else ""
-            tds.append(f"<td class='{cls.strip()}'>{day}{badge}</td>")
-        rows.append(f"<tr>{''.join(tds)}</tr>")
+    selected = st.session_state.get("cal_date") or ""
 
-    html = f"""
-    <style>
-    /* Self-contained dark card: the components iframe background is
-       transparent, and the iframe's default text color is black — so the
-       calendar must carry its own opaque background + explicit colors on
-       EVERY element, never relying on inheritance. */
-    .cal {{ font-family: -apple-system, 'PingFang SC', sans-serif; font-size: 13px;
-      background: #1b1b1f; border: 1px solid #3a3631; border-radius: 10px;
-      padding: 8px 6px; }}
-    .cal, .cal td, .cal th, .cal b, .cal .legend {{ color: #e8e4dd; }}
-    .cal table {{ width: 100%; border-collapse: separate; border-spacing: 2px;
-      text-align: center; }}
-    .cal th {{ color: #9a958e; font-weight: 500; padding: 2px 0; font-size: 12px; }}
-    .cal th.weekend {{ color: #7d776f; }}
-    .cal td {{ padding: 6px 2px; border-radius: 8px;
-      background: rgba(255,255,255,0.04); color: #e8e4dd; position: relative; }}
-    .cal td.today {{ box-shadow: inset 0 0 0 1px #ff5a1f; }}
-    .cal td.sel {{ background: #ff5a1f; color: #fff; font-weight: 700; }}
-    .cal td.sel .bdg {{ background: #ffffff; color: #ff5a1f; }}
-    .cal .bdg {{ display: inline-block; min-width: 15px; height: 15px; line-height: 15px;
-      background: #ff5a1f; color: #fff; border-radius: 8px; font-size: 10px;
-      font-weight: 600; padding: 0 3px; margin-left: 2px; }}
-    .cal .legend {{ margin-top: 4px; font-size: 11px; color: #9a958e; }}
-    </style>
-    <div class="cal">
-      <div style="text-align:center; margin-bottom: 4px;"><b>{y}年{m}月</b></div>
-      <table><tr><th>一</th><th>二</th><th>三</th><th>四</th><th>五</th>
-        <th class="weekend">六</th><th class="weekend">日</th></tr>
-      {''.join(rows)}
-      </table>
-      <div class="legend">橙色 = 当日任务数 · 橙底 = 已选中 · 描边 = 今天</div>
-    </div>
-    """
-    st.components.v1.html(html, height=270)
+    heads = st.columns(7)
+    for col, h in zip(heads, ["一", "二", "三", "四", "五", "六", "日"]):
+        with col:
+            st.caption(h)
+    for week in _cal.Calendar(firstweekday=0).monthdayscalendar(y, m):
+        cols = st.columns(7)
+        for col, day in zip(cols, week):
+            with col:
+                if not day:
+                    st.write("")
+                    continue
+                key = f"{y}-{m:02d}-{day:02d}"
+                label = f"{day}" + (f"·{counts[key]}" if key in counts else "")
+                if st.button(
+                    label, key=f"calday_{key}", use_container_width=True,
+                    type="primary" if key == selected else "secondary",
+                ):
+                    st.session_state["cal_date"] = key
+                    st.session_state["history_board"] = None
+                    st.session_state.pop("active_task", None)
+                    st.session_state["viewing_history"] = None
+                    st.session_state["viewing_batch"] = None
+                    st.rerun()
+    st.caption("选中日 = 橙色按钮 · 日期后 ·N = 当日任务数")
+
+    # 日历下方：选中日期的任务列表（经典列表样式）
+    cal_date = st.session_state.get("cal_date")
+    if cal_date:
+        st.markdown("---")
+        st.markdown(f"**{cal_date} 的任务**")
+        items = group_history([e for e in get_history() if e["date"] == cal_date])
+        if not items:
+            st.caption("当日无分析记录")
+            return
+        for it in items:
+            c1, c2 = st.columns([6, 1])
+            with c1:
+                if st.button(
+                    history_label(it), key=f"calday_task_{it['key']}",
+                    use_container_width=True,
+                ):
+                    st.session_state["history_board"] = static_batch_from_item(it)
+                    st.session_state.pop("active_task", None)
+                    st.rerun()
+            with c2:
+                if st.button(
+                    "✎", key=f"calday_edit_{it['key']}", use_container_width=True,
+                ):
+                    st.session_state["editing_hist"] = it["key"]
+                    st.rerun()
+            if st.session_state.get("editing_hist") == it["key"]:
+                new_title = st.text_input(
+                    "新标题", value=it.get("title", ""), key=f"calday_ti_{it['key']}"
+                )
+                if st.button("保存", key=f"calday_save_{it['key']}"):
+                    if it["kind"] == "batch":
+                        for e in it["entries"]:
+                            set_log_title(e["path"], new_title)
+                    else:
+                        set_log_title(it["path"], new_title)
+                    st.session_state["editing_hist"] = None
+                    st.rerun()
 
 
 def _timedelta_days(n: int):

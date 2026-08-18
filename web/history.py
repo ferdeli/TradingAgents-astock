@@ -155,6 +155,34 @@ def set_log_title(path: str, title: str) -> None:
         pass  # title editing is cosmetic; failure must not break the page
 
 
+def static_batch_from_item(item: dict) -> dict:
+    """Reconstruct a read-only batch dict from a history item (single or batch)
+    so the shared grid-panel view can render historical results."""
+    entries = item["entries"] if item["kind"] == "batch" else [item]
+    tickers: list[str] = []
+    results: dict = {}
+    titles: dict = {}
+    for e in entries:
+        state = load_analysis(e["path"])
+        tickers.append(e["ticker"])
+        titles[e["ticker"]] = e.get("title") or e["ticker"]
+        results[e["ticker"]] = {
+            "final_state": state,
+            "signal": extract_signal(state),
+            "trade_date": e["date"],
+            "error": None,
+        }
+    return {
+        "tickers": tickers,
+        "index": len(tickers),
+        "done": True,
+        "interrupted": False,
+        "titles": titles,
+        "results": results,
+        "trade_date": entries[0]["date"] if entries else "",
+    }
+
+
 def _completed_key(ticker: str, trade_date: str) -> tuple[str, str]:
     return ticker.upper(), trade_date
 

@@ -386,52 +386,6 @@ if start_req:
     _start_batch_current()
 
 
-def _static_batch(item: dict) -> dict:
-    """Reconstruct a read-only batch dict from history for the board view."""
-    entries = item["entries"] if item["kind"] == "batch" else [item]
-    tickers: list[str] = []
-    results: dict = {}
-    titles: dict = {}
-    for e in entries:
-        state = load_analysis(e["path"])
-        tickers.append(e["ticker"])
-        titles[e["ticker"]] = e.get("title") or e["ticker"]
-        results[e["ticker"]] = {
-            "final_state": state,
-            "signal": extract_signal(state),
-            "trade_date": e["date"],
-            "error": None,
-        }
-    return {
-        "tickers": tickers,
-        "index": len(tickers),
-        "done": True,
-        "interrupted": False,
-        "titles": titles,
-        "results": results,
-        "trade_date": entries[0]["date"] if entries else "",
-    }
-
-
-def _render_day_tasks(day: str) -> None:
-    """Task list for a calendar-selected day; clicking opens the board view."""
-    from web.history import get_history, group_history, history_label
-
-    st.subheader(f"📅 {day} 的任务")
-    items = group_history([e for e in get_history() if e["date"] == day])
-    if not items:
-        st.caption("当日无分析记录")
-    else:
-        for it in items:
-            if st.button(history_label(it), key=f"daytask_{it['key']}", use_container_width=True):
-                st.session_state["history_board"] = _static_batch(it)
-                st.session_state.pop("active_task", None)
-                st.rerun()
-    if st.button("关闭日历选择", key="close_cal_date"):
-        st.session_state.pop("cal_date", None)
-        st.rerun()
-
-
 # ── Main area state machine ─────────────────────────────────────────────────
 
 tracker: ProgressTracker | None = st.session_state.get("tracker")
@@ -452,10 +406,6 @@ if history_board:
         _render_task_detail(active_task, history_board)
     else:
         _render_batch_board(history_board)
-
-# State 0.55: Calendar-selected day → task list → click opens the board
-elif cal_date:
-    _render_day_tasks(cal_date)
 
 # State 0.5: Viewing a multi-ticker batch (all tickers of one analysis)
 if viewing_batch:
