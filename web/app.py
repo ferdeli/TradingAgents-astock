@@ -23,7 +23,12 @@ from tradingagents.default_config import DEFAULT_CONFIG  # noqa: E402
 from web.components.progress_panel import render_progress  # noqa: E402
 from web.components.report_viewer import render_report  # noqa: E402
 from web.components.sidebar import render_sidebar  # noqa: E402
-from web.history import clear_incomplete_task, extract_signal, load_analysis  # noqa: E402
+from web.history import (
+    clear_incomplete_task,
+    extract_signal,
+    get_batch,
+    load_analysis,
+)  # noqa: E402
 from web.progress import ProgressTracker  # noqa: E402
 from web.runner import run_analysis_in_thread  # noqa: E402
 
@@ -42,6 +47,13 @@ st.markdown(
     """
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap');
+
+    /* Sidebar: default to the widest adjustable range. */
+    [data-testid="stSidebar"] {
+        width: 26rem !important;
+        max-width: 26rem !important;
+        min-width: 18rem !important;
+    }
 
     /* Hide Streamlit chrome for clean video recording.
        IMPORTANT: do NOT `display:none` the whole header OR the whole toolbar.
@@ -374,7 +386,29 @@ if start_req:
 
 tracker: ProgressTracker | None = st.session_state.get("tracker")
 viewing_history: str | None = st.session_state.get("viewing_history")
+viewing_batch: str | None = st.session_state.get("viewing_batch")
 batch = st.session_state.get("batch")
+
+# State 0.5: Viewing a multi-ticker batch (all tickers of one analysis)
+if viewing_batch:
+    if st.button("← 返回", key="back_from_batch"):
+        st.session_state.pop("viewing_batch", None)
+        st.rerun()
+    entries = get_batch(viewing_batch)
+    if not entries:
+        st.caption("该批次无可用记录")
+    else:
+        st.subheader(f"📊 批量分析 · {len(entries)} 个标的 · {entries[0]['date']}")
+        tabs = st.tabs([e["ticker"] for e in entries])
+        for tab, e in zip(tabs, entries):
+            with tab:
+                try:
+                    state = load_analysis(e["path"])
+                    render_report(
+                        state, e["ticker"], e["date"], extract_signal(state), offline=True
+                    )
+                except Exception as exc:  # noqa: BLE001 — one tab must not kill the batch view
+                    st.error(f"加载失败: {exc}")
 
 # State 1: Viewing a historical analysis
 if viewing_history:

@@ -27,7 +27,9 @@ def _results_dir() -> Path:
 def get_history() -> list[dict[str, str]]:
     """Scan saved analysis logs and return a sorted list (newest first).
 
-    Each entry: {"ticker": "300750", "date": "2026-05-12", "path": "/abs/path/...json"}
+    Each entry: {"ticker", "date", "path", "batch_id", "title", "name"} —
+    ``batch_id`` groups the tickers of one multi-ticker analysis; ``title`` /
+    ``name`` drive the history label.
     """
     root = _results_dir()
     if not root.exists():
@@ -40,10 +42,60 @@ def get_history() -> list[dict[str, str]]:
             continue
         date = match.group(1)
         ticker = log_file.parent.parent.name
-        entries.append({"ticker": ticker, "date": date, "path": str(log_file)})
+        meta = _log_meta(log_file)
+        entries.append({
+            "ticker": ticker,
+            "date": date,
+            "path": str(log_file),
+            **meta,
+        })
 
     entries.sort(key=lambda e: e["date"], reverse=True)
     return entries
+
+
+def _log_meta(path: Path) -> dict[str, str]:
+    """Extract batch_id / title / display name from a saved state log."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {"batch_id": "", "title": "", "name": ""}
+    name = ""
+    try:
+        from web.stock_display import _extract_stock_name_from_state
+
+        name = _extract_stock_name_from_state(
+            str(data.get("company_of_interest", "")), data
+        ) or ""
+    except Exception:  # noqa: BLE001 — name is cosmetic
+        name = ""
+    return {
+        "batch_id": str(data.get("batch_id", "") or ""),
+        "title": str(data.get("title", "") or ""),
+        "name": name,
+    }
+
+
+def get_batch(batch_id: str) -> list[dict[str, str]]:
+    """All history entries belonging to one multi-ticker batch."""
+    return [e for e in get_history() if e.get("batch_id") == batch_id]
+
+
+def set_log_title(path: str, title: str) -> None:
+    """Persist a user-edited title into a saved state log.
+
+    Only touches the ``title`` field — the analysis content is never changed,
+    so editing a title never alters the historical record itself.
+    """
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        data["title"] = title
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
+    except (OSError, json.JSONDecodeError):
+        pass  # title editing is cosmetic; failure must not break the page
 
 
 def _completed_key(ticker: str, trade_date: str) -> tuple[str, str]:

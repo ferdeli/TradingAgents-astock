@@ -291,45 +291,46 @@ def render_sidebar() -> None:
 
     ticker_inputs: list[str] = []
     for i in range(ticker_count):
-        # 行 1：任务标题（可选）+ 删除
-        c_title, c_x = st.columns([5, 1])
-        with c_title:
-            st.text_input(
-                f"任务标题 {i+1}",
-                placeholder="任务标题（可选，面板与详情显示）",
-                key=f"task_title_{i}",
-                label_visibility="collapsed",
-            )
-        with c_x:
-            st.write("")
-            st.button(
-                "✖", key=f"remove_row_{i}", disabled=ticker_count <= 1,
-                on_click=_remove_ticker_row, args=(i,), use_container_width=True,
-            )
-        # 行 2：标的 + 持仓均价 + 持仓总量
-        c_t, c_p, c_q = st.columns([4, 2, 2])
-        with c_t:
-            val = st.text_input(
-                f"标的 {i+1}",
-                placeholder="代码或名称",
-                key=f"ticker_row_{i}",
-                label_visibility="collapsed",
-                help="输入6位A股代码或中文股票全称；每行可填该标的的持仓均价/总量，分析时联动。",
-            )
-        with c_p:
-            st.number_input(
-                f"均价{i}", min_value=0.0, step=0.01, value=0.0,
-                key=f"holding_cost_{i}", label_visibility="collapsed",
-                help="该标的持仓均价（留 0 = 无持仓，不生成持仓操作建议）",
-            )
-        with c_q:
-            st.number_input(
-                f"总量{i}", min_value=0, step=100, value=0,
-                key=f"holding_qty_{i}", label_visibility="collapsed",
-                help="该标的持仓总量（股）",
-            )
-        if val and val.strip():
-            ticker_inputs.append(val.strip())
+        # 每个任务一个分组容器：标题行（标题 + 删除）与标的/持仓行对齐
+        with st.container(border=True):
+            c_title, c_x = st.columns([5, 1])
+            with c_title:
+                st.text_input(
+                    f"任务标题 {i+1}",
+                    placeholder="标题（可选）",
+                    key=f"task_title_{i}",
+                    label_visibility="collapsed",
+                )
+            with c_x:
+                st.write("")
+                st.button(
+                    "✖", key=f"remove_row_{i}", disabled=ticker_count <= 1,
+                    on_click=_remove_ticker_row, args=(i,), use_container_width=True,
+                )
+            c_t, c_p, c_q = st.columns([3, 1, 1])
+            with c_t:
+                st.text_input(
+                    f"标的 {i+1}",
+                    placeholder="代码或名称",
+                    key=f"ticker_row_{i}",
+                    label_visibility="collapsed",
+                    help="输入6位A股代码或中文股票全称；每行可填该标的的持仓均价/总量，分析时联动。",
+                )
+            with c_p:
+                st.number_input(
+                    f"均价{i}", min_value=0.0, step=0.01, value=0.0, format="%.2f",
+                    key=f"holding_cost_{i}", label_visibility="collapsed",
+                    help="该标的持仓均价（留 0 = 无持仓，不生成持仓操作建议）",
+                )
+            with c_q:
+                st.number_input(
+                    f"总量{i}", min_value=0, step=100, value=0,
+                    key=f"holding_qty_{i}", label_visibility="collapsed",
+                    help="该标的持仓总量（股）",
+                )
+        if val := st.session_state.get(f"ticker_row_{i}", ""):
+            if val.strip():
+                ticker_inputs.append(val.strip())
     if st.button("➕ 添加标的", key="add_ticker_row", use_container_width=True):
         st.session_state["ticker_count"] = ticker_count + 1
 
@@ -438,12 +439,69 @@ def render_sidebar() -> None:
         st.caption("暂无历史记录")
         return
 
-    for entry in history[:20]:
-        t, d = entry["ticker"], entry["date"]
-        label = f"{t}  ·  {d}"
-        if st.button(label, key=f"hist_{t}_{d}", use_container_width=True):
-            st.session_state["viewing_history"] = entry["path"]
-            st.session_state["start_analysis"] = None
+    # 按 batch_id 分组：同一次多标的分析合并为一条记录
+    batches: dict[str, list] = {}
+    singles: list = []
+    for e in history:
+        if e.get("batch_id"):
+            batches.setdefault(e["batch_id"], []).append(e)
+        else:
+            singles.append(e)
+
+    display: list[dict] = []
+    for bid, entries in batches.items():
+        display.append({
+            "kind": "batch", "key": bid, "batch_id": bid, "entries": entries,
+            "date": max(e["date"] for e in entries),
+            "title": next((e["title"] for e in entries if e.get("title")), ""),
+        })
+    for e in singles:
+        display.append({
+            "kind": "single", "key": f"{e['ticker']}_{e['date']}_{abs(hash(e['path']))}",
+            "path": e["path"], "ticker": e["ticker"], "date": e["date"],
+            "title": e.get("title", ""), "name": e.get("name", ""),
+        })
+    display.sort(key=lambda x: x["date"], reverse=True)
+
+    from web.history import set_log_title
+
+    for item in display[:20]:
+        if item["kind"] == "batch":
+            n = len(item["entries"])
+            label = (item["title"] or f"批量分析 · {n} 个标的") + f" · {item['date']}"
+        else:
+            if item["title"]:
+                label = f"{item['title']} · {item['date']}"
+            elif item["name"]:
+                label = f"{item['name']}（{item['ticker']}）· {item['date']}"
+            else:
+                label = f"{item['ticker']} · {item['date']}"
+        c1, c2 = st.columns([6, 1])
+        with c1:
+            if st.button(label, key=f"hist_{item['key']}", use_container_width=True):
+                if item["kind"] == "batch":
+                    st.session_state["viewing_batch"] = item["batch_id"]
+                    st.session_state["viewing_history"] = None
+                else:
+                    st.session_state["viewing_history"] = item["path"]
+                    st.session_state["viewing_batch"] = None
+                st.session_state["start_analysis"] = None
+        with c2:
+            if st.button("✎", key=f"edit_{item['key']}", use_container_width=True):
+                st.session_state["editing_hist"] = item["key"]
+                st.rerun()
+        if st.session_state.get("editing_hist") == item["key"]:
+            new_title = st.text_input(
+                "新标题", value=item.get("title", ""), key=f"title_input_{item['key']}"
+            )
+            if st.button("保存", key=f"save_{item['key']}"):
+                if item["kind"] == "batch":
+                    for e in item["entries"]:
+                        set_log_title(e["path"], new_title)
+                else:
+                    set_log_title(item["path"], new_title)
+                st.session_state["editing_hist"] = None
+                st.rerun()
 
     st.markdown("---")
     st.caption("⚠️ 仅供学习研究，不构成投资建议")
