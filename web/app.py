@@ -20,6 +20,7 @@ load_dotenv(_PROJECT_ROOT / ".env", override=True)
 
 from tradingagents.default_config import DEFAULT_CONFIG  # noqa: E402
 
+from web.components.calendar import render_calendar_view  # noqa: E402
 from web.components.progress_panel import render_progress  # noqa: E402
 from web.components.report_viewer import render_report  # noqa: E402
 from web.components.sidebar import render_sidebar  # noqa: E402
@@ -393,6 +394,7 @@ viewing_history: str | None = st.session_state.get("viewing_history")
 viewing_batch: str | None = st.session_state.get("viewing_batch")
 history_board: dict | None = st.session_state.get("history_board")
 cal_date: str | None = st.session_state.get("cal_date")
+show_calendar: bool = st.session_state.get("show_calendar", False)
 batch = st.session_state.get("batch")
 
 # State 0.6: History board view (grid panel rebuilt from saved logs)
@@ -406,6 +408,10 @@ if history_board:
         _render_task_detail(active_task, history_board)
     else:
         _render_batch_board(history_board)
+
+# State 0.65: History calendar (left month grid + right day tasks)
+elif show_calendar:
+    render_calendar_view()
 
 # State 0.5: Viewing a multi-ticker batch (all tickers of one analysis)
 if viewing_batch:
