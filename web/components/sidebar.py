@@ -247,15 +247,34 @@ def _render_llm_config() -> None:
 
 
 def _render_history_calendar() -> None:
-    """Monthly calendar of analysis history: days with tasks show a badge with
-    the task count; clicking a day selects it (the day's task list opens in
-    the main area); ◀▶ navigate months.
+    """History calendar.
+
+    Interaction is driven by a native ``st.date_input`` (year/month switching
+    and day picking are built in and immediately trigger a rerun). The HTML
+    month grid below is a *display* of the picked month: task-count badges,
+    today highlight and the selected day — clickable HTML callbacks are not
+    reliable here (st.components values are only read on the next rerun), so
+    day/month selection lives in the date_input.
     """
     from web.history import count_tasks_on
 
     today = date.today()
-    y, m = st.session_state.get("cal_ym") or (today.year, today.month)
-    selected = st.session_state.get("cal_date") or ""
+    picked = st.date_input(
+        "选择日期（点标题可切换年/月）",
+        value=today,
+        key="cal_pick_date",
+        help="点击后立即在右侧显示该日任务列表",
+    )
+    # date_input 交互自带 rerun；同步到主区状态
+    if st.session_state.get("cal_date") != picked.isoformat():
+        st.session_state["cal_date"] = picked.isoformat()
+        st.session_state["history_board"] = None
+        st.session_state.pop("active_task", None)
+        st.session_state["viewing_history"] = None
+        st.session_state["viewing_batch"] = None
+
+    y, m = picked.year, picked.month
+    selected = picked.isoformat()
     today_key = today.strftime("%Y-%m-%d")
 
     # Task counts for every day of the shown month
@@ -284,7 +303,7 @@ def _render_history_calendar() -> None:
             if key == selected:
                 cls += " sel"
             badge = f"<span class='bdg'>{counts[key]}</span>" if key in counts else ""
-            tds.append(f"<td class='{cls.strip()}' onclick='pick(\"{key}\")'>{day}{badge}</td>")
+            tds.append(f"<td class='{cls.strip()}'>{day}{badge}</td>")
         rows.append(f"<tr>{''.join(tds)}</tr>")
 
     html = f"""
@@ -301,55 +320,26 @@ def _render_history_calendar() -> None:
       text-align: center; }}
     .cal th {{ color: #9a958e; font-weight: 500; padding: 2px 0; font-size: 12px; }}
     .cal th.weekend {{ color: #7d776f; }}
-    .cal td {{ padding: 6px 2px; cursor: pointer; border-radius: 8px;
+    .cal td {{ padding: 6px 2px; border-radius: 8px;
       background: rgba(255,255,255,0.04); color: #e8e4dd; position: relative; }}
-    .cal td:hover {{ background: rgba(255,255,255,0.12); }}
     .cal td.today {{ box-shadow: inset 0 0 0 1px #ff5a1f; }}
     .cal td.sel {{ background: #ff5a1f; color: #fff; font-weight: 700; }}
     .cal td.sel .bdg {{ background: #ffffff; color: #ff5a1f; }}
     .cal .bdg {{ display: inline-block; min-width: 15px; height: 15px; line-height: 15px;
       background: #ff5a1f; color: #fff; border-radius: 8px; font-size: 10px;
       font-weight: 600; padding: 0 3px; margin-left: 2px; }}
-    .cal .nav {{ display: flex; justify-content: space-between; align-items: center;
-      margin-bottom: 6px; }}
-    .cal .nav button {{ background: rgba(255,255,255,0.08); border: 1px solid #44403a;
-      color: #e8e4dd; border-radius: 6px; cursor: pointer; padding: 1px 8px; }}
-    .cal .nav button:hover {{ background: rgba(255,255,255,0.15); }}
     .cal .legend {{ margin-top: 4px; font-size: 11px; color: #9a958e; }}
     </style>
     <div class="cal">
-      <div class="nav"><button onclick="nav(-1)">◀</button>
-        <b>{y}年{m}月</b><button onclick="nav(1)">▶</button></div>
+      <div style="text-align:center; margin-bottom: 4px;"><b>{y}年{m}月</b></div>
       <table><tr><th>一</th><th>二</th><th>三</th><th>四</th><th>五</th>
         <th class="weekend">六</th><th class="weekend">日</th></tr>
       {''.join(rows)}
       </table>
       <div class="legend">橙色 = 当日任务数 · 橙底 = 已选中 · 描边 = 今天</div>
     </div>
-    <script>
-    function pick(d) {{ Streamlit.setComponentValue('day:' + d); }}
-    function nav(delta) {{ Streamlit.setComponentValue(delta > 0 ? 'next' : 'prev'); }}
-    </script>
     """
-    value = st.components.v1.html(html, height=270)
-    if not isinstance(value, str) or not value:
-        return  # bare-import / no-run environments return non-str placeholders
-    if value == "next":
-        m2 = m + 1
-        st.session_state["cal_ym"] = (y + (m2 - 1) // 12, (m2 - 1) % 12 + 1)
-        st.rerun()
-    elif value == "prev":
-        m2 = m - 1
-        st.session_state["cal_ym"] = (y + (m2 - 1) // 12, (m2 - 1) % 12 + 1)
-        st.rerun()
-    elif value.startswith("day:"):
-        st.session_state["cal_date"] = value[4:]
-        st.session_state["history_board"] = None
-        st.session_state.pop("active_task", None)
-        st.session_state["viewing_history"] = None
-        st.session_state["viewing_batch"] = None
-        st.session_state["start_analysis"] = None
-        st.rerun()
+    st.components.v1.html(html, height=270)
 
 
 def _timedelta_days(n: int):
