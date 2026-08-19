@@ -222,6 +222,9 @@ def _start_batch_current() -> None:
     # Per-ticker holdings: this ticker's row (均价>0) → config.holdings.
     config = dict(batch["config"])
     config["holdings"] = (batch.get("holdings_map") or {}).get(ticker)
+    # Batch metadata persisted into the state log for history grouping/editing.
+    config["batch_id"] = batch["batch_id"]
+    config["title"] = batch.get("title") or ticker
     tracker = ProgressTracker(
         ticker=ticker,
         trade_date=batch["trade_date"],
@@ -315,10 +318,10 @@ def _render_batch_board(batch: dict | None = None) -> None:
     batch = batch or st.session_state.get("batch")
     if not batch:
         return
-    titles = batch.get("titles") or {}
     n = len(batch["tickers"])
     done = len(batch["results"])
-    st.subheader("📋 分析任务面板")
+    title = batch.get("title") or "分析任务"
+    st.subheader(f"📋 {title}")
     if batch.get("done"):
         st.caption(f"共 {n} 个任务，全部结束（成功 {done - sum(1 for r in batch['results'].values() if r.get('error'))}，"
                    f"失败 {sum(1 for r in batch['results'].values() if r.get('error'))}）")
@@ -332,7 +335,7 @@ def _render_batch_board(batch: dict | None = None) -> None:
         if i % 3 == 0:
             row_cols = st.columns(3)
         with row_cols[i % 3]:
-            _render_task_cell(batch, t, i, titles.get(t, t))
+            _render_task_cell(batch, t, i, t)
 
 
 def _render_task_detail(ticker: str, batch: dict | None = None) -> None:
@@ -340,11 +343,11 @@ def _render_task_detail(ticker: str, batch: dict | None = None) -> None:
     batch = batch or st.session_state.get("batch")
     if not batch:
         return
-    titles = batch.get("titles") or {}
+    title = batch.get("title") or ticker
     if st.button("← 返回任务面板", key="back_to_board", use_container_width=False):
         st.session_state.pop("active_task", None)
         st.rerun()
-    st.subheader(f"{titles.get(ticker, ticker)}")
+    st.subheader(f"{title} · {ticker}")
     result = batch["results"].get(ticker)
     if result:
         if result.get("error"):
@@ -376,9 +379,10 @@ if start_req:
         "tickers": [t for t in tickers if t],
         "index": 0,
         "trade_date": trade_date,
+        "batch_id": datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f"),
         "config": _build_config(),
         "holdings_map": start_req.get("holdings_map", {}),  # ticker -> {quantity, cost_price}
-        "titles": start_req.get("titles_map", {}),          # ticker -> custom title
+        "title": start_req.get("title", ""),                # 任务级标题（一次分析任务一个）
         "results": {},          # ticker -> {final_state, signal, trade_date, error?}
         "done": False,
         "interrupted": False,

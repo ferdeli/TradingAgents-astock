@@ -161,11 +161,9 @@ def static_batch_from_item(item: dict) -> dict:
     entries = item["entries"] if item["kind"] == "batch" else [item]
     tickers: list[str] = []
     results: dict = {}
-    titles: dict = {}
     for e in entries:
         state = load_analysis(e["path"])
         tickers.append(e["ticker"])
-        titles[e["ticker"]] = e.get("title") or e["ticker"]
         results[e["ticker"]] = {
             "final_state": state,
             "signal": extract_signal(state),
@@ -177,7 +175,7 @@ def static_batch_from_item(item: dict) -> dict:
         "index": len(tickers),
         "done": True,
         "interrupted": False,
-        "titles": titles,
+        "title": item.get("title", ""),   # 任务级标题
         "results": results,
         "trade_date": entries[0]["date"] if entries else "",
     }

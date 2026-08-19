@@ -272,7 +272,7 @@ def render_sidebar() -> None:
 
     def _remove_ticker_row(idx: int) -> None:
         n = st.session_state.get("ticker_count", 1)
-        keys = ("ticker_row_", "holding_cost_", "holding_qty_", "task_title_")
+        keys = ("ticker_row_", "holding_cost_", "holding_qty_")
         vals = {k: [st.session_state.get(f"{k}{j}", "") for j in range(n)] for k in keys}
         for k in keys:
             vals[k].pop(idx)
@@ -280,6 +280,14 @@ def render_sidebar() -> None:
                 st.session_state[f"{k}{j}"] = vals[k][j]
             st.session_state[f"{k}{n - 1}"] = ""   # clear the tail slot
         st.session_state["ticker_count"] = max(1, n - 1)
+
+    # 任务标题：属于整个分析任务（一个任务可含多个标的），不是单标的
+    st.text_input(
+        "任务标题（可选）",
+        placeholder="本次分析任务的标题，可含一个或多个标的",
+        key="batch_title",
+        help="标题属于整个分析任务；留空则显示「批量分析 · N 个标的」或标的代码。",
+    )
 
     h1, h2, h3 = st.columns([4, 2, 2])
     with h1:
@@ -291,23 +299,9 @@ def render_sidebar() -> None:
 
     ticker_inputs: list[str] = []
     for i in range(ticker_count):
-        # 每个任务一个分组容器：标题行（标题 + 删除）与标的/持仓行对齐
+        # 每个任务一个分组容器：标的/持仓行对齐
         with st.container(border=True):
-            c_title, c_x = st.columns([5, 1])
-            with c_title:
-                st.text_input(
-                    f"任务标题 {i+1}",
-                    placeholder="标题（可选）",
-                    key=f"task_title_{i}",
-                    label_visibility="collapsed",
-                )
-            with c_x:
-                st.write("")
-                st.button(
-                    "✖", key=f"remove_row_{i}", disabled=ticker_count <= 1,
-                    on_click=_remove_ticker_row, args=(i,), use_container_width=True,
-                )
-            c_t, c_p, c_q = st.columns([3, 1, 1])
+            c_t, c_p, c_q, c_x = st.columns([3, 1, 1, 1])
             with c_t:
                 st.text_input(
                     f"标的 {i+1}",
@@ -370,7 +364,6 @@ def render_sidebar() -> None:
         resolved: list[str] = []
         errors: list[str] = []
         holdings_map: dict[str, dict] = {}
-        titles_map: dict[str, str] = {}
         for i in range(ticker_count):
             raw = st.session_state.get(f"ticker_row_{i}", "")
             if not raw or not raw.strip():
@@ -385,17 +378,16 @@ def render_sidebar() -> None:
             if cost > 0:
                 qty = int(st.session_state.get(f"holding_qty_{i}", 0) or 0)
                 holdings_map[code] = {"quantity": qty, "cost_price": cost}
-            # 自定义任务标题（可空 → 用代码）
-            title = str(st.session_state.get(f"task_title_{i}", "") or "").strip()
-            titles_map[code] = title or code
         if errors:
             st.error("❌ " + "；".join(errors))
         elif resolved:
+            # 任务标题属于整个分析任务（一个任务可含多个标的）
+            batch_title = str(st.session_state.get("batch_title", "") or "").strip()
             st.session_state["start_analysis"] = {
                 "tickers": resolved,
                 "trade_date": trade_date.strftime("%Y-%m-%d"),
                 "holdings_map": holdings_map,
-                "titles_map": titles_map,
+                "title": batch_title,
                 "fresh": True,
             }
             st.session_state["viewing_history"] = None
