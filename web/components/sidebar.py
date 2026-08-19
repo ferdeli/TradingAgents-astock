@@ -313,7 +313,7 @@ def render_sidebar() -> None:
 
     ticker_inputs: list[str] = []
     for i in range(ticker_count):
-        # 每个任务一个分组容器：标的/持仓行对齐
+        # 每个任务一个分组容器：标的/持仓/删除对齐
         with st.container(border=True):
             c_t, c_p, c_q, c_x = st.columns([3, 1, 1, 1])
             with c_t:
@@ -337,6 +337,13 @@ def render_sidebar() -> None:
                     f"总量{i}", min_value=0, step=100, value=0,
                     key=f"holding_qty_{i}", label_visibility="collapsed",
                     help="该标的持仓总量（股）",
+                )
+            with c_x:
+                st.write("")
+                st.button(
+                    "✖", key=f"remove_row_{i}", disabled=ticker_count <= 1,
+                    on_click=_remove_ticker_row, args=(i,), use_container_width=True,
+                    help="删除该标的行",
                 )
         if val := st.session_state.get(f"ticker_row_{i}", ""):
             if val.strip():
