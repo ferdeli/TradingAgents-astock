@@ -328,6 +328,44 @@ def render_sidebar() -> None:
     if st.button("➕ 添加标的", key="add_ticker_row", use_container_width=True):
         st.session_state["ticker_count"] = ticker_count + 1
 
+    # 键盘快捷：焦点在标的输入框时按 + / = 添加一行，并自动聚焦新行输入框。
+    # st.components iframe 与主页面同源，可访问 parent.document 注册 keydown 监听、
+    # 程序化点击添加按钮，并在 rerun 完成后聚焦最后一个标的输入框。
+    st.components.v1.html(
+        """
+        <script>
+        (function () {
+          var p = window.parent.document;
+          // iframe 每次 rerun 重建，script 会重新执行；用 parent 上的标记防重复注册
+          if (p.__taAddRowHook) return;
+          p.__taAddRowHook = true;
+          p.addEventListener('keydown', function (e) {
+            if ((e.key === '+' || e.key === '=') && e.target
+                && e.target.tagName === 'INPUT'
+                && e.target.placeholder === '代码或名称') {
+              e.preventDefault();
+              var btn = Array.prototype.slice.call(p.querySelectorAll('button'))
+                  .find(function (b) { return b.textContent.indexOf('添加标的') >= 0; });
+              if (btn) {
+                btn.click();
+                setTimeout(function () {
+                  var inputs = Array.prototype.slice.call(p.querySelectorAll('input'))
+                      .filter(function (i) { return i.placeholder === '代码或名称'; });
+                  if (inputs.length) {
+                    var last = inputs[inputs.length - 1];
+                    last.focus();
+                    last.select();
+                  }
+                }, 400);
+              }
+            }
+          });
+        })();
+        </script>
+        """,
+        height=0,
+    )
+
     tickers = ticker_inputs
 
     trade_date = st.date_input(
