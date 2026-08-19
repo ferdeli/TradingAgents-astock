@@ -36,9 +36,23 @@ _PROVIDER_DISPLAY = [name for name, _ in _PROVIDERS]
 _PROVIDER_KEYS = [key for _, key in _PROVIDERS]
 
 
+def _on_ticker_input(idx: int) -> None:
+    """标的输入框 on_change：输入以 + / = 结尾 → 添加新行并移除该字符。
+
+    Streamlit 原生回调（可靠）；比 JS 键盘监听稳定得多。添加后置
+    focus_new_ticker 标记，渲染时用 iframe 尽力聚焦新行。
+    """
+    val = str(st.session_state.get(f"ticker_row_{idx}", "") or "")
+    if val.endswith(("+", "=")):
+        st.session_state[f"ticker_row_{idx}"] = val[:-1].strip()
+        st.session_state["ticker_count"] = (
+            st.session_state.get("ticker_count", 1) + 1
+        )
+        st.session_state["focus_new_ticker"] = True
+
+
 def _resolve_user_input(raw: str) -> tuple[str, str | None]:
     """Resolve raw user input to (ticker_code, error_msg).
-
     Accepts 6-digit codes or Chinese stock names (e.g. '宝光股份').
     Returns (code, None) on success or ("", error_msg) on failure.
     """
@@ -308,7 +322,9 @@ def render_sidebar() -> None:
                     placeholder="代码或名称",
                     key=f"ticker_row_{i}",
                     label_visibility="collapsed",
-                    help="输入6位A股代码或中文股票全称；每行可填该标的的持仓均价/总量，分析时联动。",
+                    on_change=_on_ticker_input, args=(i,),
+                    help="输入6位A股代码或中文股票全称；输入以 + 结尾可快速添加新行；"
+                         "每行可填该标的的持仓均价/总量，分析时联动。",
                 )
             with c_p:
                 st.number_input(
@@ -328,44 +344,27 @@ def render_sidebar() -> None:
     if st.button("➕ 添加标的", key="add_ticker_row", use_container_width=True):
         st.session_state["ticker_count"] = ticker_count + 1
 
-    # 键盘快捷：焦点在标的输入框时按 + / = 添加一行，并自动聚焦新行输入框。
-    # st.iframe（HTML string → srcdoc iframe，允许 JS 且与主页面同源）注入
-    # keydown 监听、程序化点击添加按钮，并在 rerun 完成后聚焦新行输入框。
-    # 注：st.components.v1.html 已弃用（1.61 起），故改用 st.iframe。
-    st.iframe(
-        """
-        <script>
-        (function () {
-          var p = window.parent.document;
-          // iframe 每次 rerun 重建，script 会重新执行；用 parent 上的标记防重复注册
-          if (p.__taAddRowHook) return;
-          p.__taAddRowHook = true;
-          p.addEventListener('keydown', function (e) {
-            if ((e.key === '+' || e.key === '=') && e.target
-                && e.target.tagName === 'INPUT'
-                && e.target.placeholder === '代码或名称') {
-              e.preventDefault();
-              var btn = Array.prototype.slice.call(p.querySelectorAll('button'))
-                  .find(function (b) { return b.textContent.indexOf('添加标的') >= 0; });
-              if (btn) {
-                btn.click();
-                setTimeout(function () {
-                  var inputs = Array.prototype.slice.call(p.querySelectorAll('input'))
-                      .filter(function (i) { return i.placeholder === '代码或名称'; });
-                  if (inputs.length) {
-                    var last = inputs[inputs.length - 1];
-                    last.focus();
-                    last.select();
-                  }
-                }, 400);
+    # 聚焦新行（尽力而为）：on_change 添加行后置标记，渲染时注入 iframe
+    # 聚焦最后一个标的输入框。若浏览器环境限制 iframe 访问 parent，
+    # 聚焦退化为手动点击（添加本身已由 on_change 可靠完成）。
+    if st.session_state.pop("focus_new_ticker", False):
+        st.iframe(
+            """
+            <script>
+            (function () {
+              var inputs = Array.prototype.slice.call(
+                  window.parent.document.querySelectorAll('input'))
+                  .filter(function (i) { return i.placeholder === '代码或名称'; });
+              if (inputs.length) {
+                var last = inputs[inputs.length - 1];
+                last.focus();
+                last.select();
               }
-            }
-          });
-        })();
-        </script>
-        """,
-        height="content",
-    )
+            })();
+            </script>
+            """,
+            height="content",
+        )
 
     tickers = ticker_inputs
 
