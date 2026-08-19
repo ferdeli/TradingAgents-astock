@@ -329,9 +329,10 @@ def render_sidebar() -> None:
         st.session_state["ticker_count"] = ticker_count + 1
 
     # 键盘快捷：焦点在标的输入框时按 + / = 添加一行，并自动聚焦新行输入框。
-    # st.components iframe 与主页面同源，可访问 parent.document 注册 keydown 监听、
-    # 程序化点击添加按钮，并在 rerun 完成后聚焦最后一个标的输入框。
-    st.components.v1.html(
+    # st.iframe（HTML string → srcdoc iframe，允许 JS 且与主页面同源）注入
+    # keydown 监听、程序化点击添加按钮，并在 rerun 完成后聚焦新行输入框。
+    # 注：st.components.v1.html 已弃用（1.61 起），故改用 st.iframe。
+    st.iframe(
         """
         <script>
         (function () {
@@ -363,7 +364,7 @@ def render_sidebar() -> None:
         })();
         </script>
         """,
-        height=0,
+        height="content",
     )
 
     tickers = ticker_inputs
