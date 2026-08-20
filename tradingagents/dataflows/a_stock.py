@@ -800,7 +800,10 @@ def _load_ohlcv_astock(symbol: str, curr_date: str) -> pd.DataFrame:
             if df.empty:
                 raise ValueError(f"No OHLCV data from sina for {code}")
         except Exception:
-            raise ValueError(f"No OHLCV data from mootdx/sina for {code}")
+            # Offline last resort: stale disk cache (mtime-agnostic).
+            df, cached = _load_ohlcv_disk_cache(code, start_date=None, end_date=curr_date)
+            if not cached:
+                raise ValueError(f"No OHLCV data from mootdx/sina for {code}")
 
     df, _ = _supplement_stale_ohlcv_with_sina(code, df, curr_date, start_date=None)
 
@@ -818,6 +821,37 @@ def _load_ohlcv_astock(symbol: str, curr_date: str) -> pd.DataFrame:
 
 
 # ---- 1. get_stock_data ----
+
+
+def _load_ohlcv_disk_cache(
+    code: str, start_date: str | None = None, end_date: str | None = None
+) -> tuple[pd.DataFrame, bool]:
+    """Fall back to the on-disk CSV cache when all online OHLCV sources fail.
+
+    Reads ``{data_cache_dir}/{code}-astock-daily.csv`` regardless of its mtime
+    (the "today only" freshness rule applies to normal loads; this is a last
+    resort so offline analysis still renders K-lines). Returns (df, True) on
+    a non-empty hit.
+    """
+    from .config import get_config
+
+    cache_dir = get_config().get(
+        "data_cache_dir", os.path.expanduser("~/.tradingagents/cache")
+    )
+    cache_file = os.path.join(cache_dir, f"{code}-astock-daily.csv")
+    if not os.path.exists(cache_file):
+        return pd.DataFrame(), False
+    try:
+        df = pd.read_csv(cache_file, on_bad_lines="skip", encoding="utf-8")
+        df = _normalize_ohlcv_dates(df)
+        if start_date:
+            df = df[df["Date"] >= pd.to_datetime(start_date)]
+        if end_date:
+            df = df[df["Date"] <= pd.to_datetime(end_date)]
+        return df, not df.empty
+    except Exception as e:  # noqa: BLE001 — cache read failure degrades to "no data"
+        logger.warning("offline OHLCV cache read failed for %s: %s", code, e)
+        return pd.DataFrame(), False
 
 
 def get_stock_data(
@@ -860,10 +894,14 @@ def get_stock_data(
         try:
             df = _sina_kline_fallback(code, start_date, end_date)
             if df.empty:
-                return "K线数据获取失败：mootdx和新浪备用源均不可用，请检查网络连接"
+                raise ValueError(f"No data from sina for {code}")
             data_source = "sina HTTP (fallback)"
         except Exception:
-            return "K线数据获取失败：mootdx和新浪备用源均不可用，请检查网络连接"
+            # Last resort: the on-disk CSV cache (offline availability).
+            df, cached = _load_ohlcv_disk_cache(code, start_date, end_date)
+            if not cached:
+                return "K线数据获取失败：mootdx和新浪备用源均不可用，请检查网络连接"
+            data_source = "offline cache (fallback)"
 
     df, supplemented = _supplement_stale_ohlcv_with_sina(code, df, end_date, start_date)
     if supplemented:

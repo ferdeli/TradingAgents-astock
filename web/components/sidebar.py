@@ -1,4 +1,4 @@
-"""Sidebar: stock input, LLM config, and history list."""
+"""Sidebar: stock input, LLM config, and history calendar."""
 
 from __future__ import annotations
 
@@ -36,9 +36,23 @@ _PROVIDER_DISPLAY = [name for name, _ in _PROVIDERS]
 _PROVIDER_KEYS = [key for _, key in _PROVIDERS]
 
 
+def _on_ticker_input(idx: int) -> None:
+    """标的输入框 on_change：输入以 + / = 结尾 → 添加新行并移除该字符。
+
+    Streamlit 原生回调（可靠）；比 JS 键盘监听稳定得多。添加后置
+    focus_new_ticker 标记，渲染时用 iframe 尽力聚焦新行。
+    """
+    val = str(st.session_state.get(f"ticker_row_{idx}", "") or "")
+    if val.endswith(("+", "=")):
+        st.session_state[f"ticker_row_{idx}"] = val[:-1].strip()
+        st.session_state["ticker_count"] = (
+            st.session_state.get("ticker_count", 1) + 1
+        )
+        st.session_state["focus_new_ticker"] = True
+
+
 def _resolve_user_input(raw: str) -> tuple[str, str | None]:
     """Resolve raw user input to (ticker_code, error_msg).
-
     Accepts 6-digit codes or Chinese stock names (e.g. '宝光股份').
     Returns (code, None) on success or ("", error_msg) on failure.
     """
@@ -139,6 +153,7 @@ def _render_llm_config() -> None:
         "LLM 供应商",
         range(len(_PROVIDERS)),
         format_func=lambda i: _PROVIDER_DISPLAY[i],
+        index=_PROVIDER_KEYS.index("deepseek"),   # 默认 DeepSeek
         key="llm_provider_idx",
         help="选择你配置了 API Key 的供应商",
     )
@@ -265,12 +280,100 @@ def render_sidebar() -> None:
     st.markdown("---")
     st.markdown("#### 新建分析")
 
-    ticker = st.text_input(
-        "股票代码",
-        placeholder="例: 300750 或 宁德时代",
-        key="input_ticker",
-        help="输入6位A股代码或中文股票全称",
+    # ── 多标的：动态列表录入（每行标的联动该行持仓均价/总量）──
+    st.markdown("**分析标的**")
+    ticker_count = st.session_state.get("ticker_count", 1)
+
+    def _remove_ticker_row(idx: int) -> None:
+        n = st.session_state.get("ticker_count", 1)
+        keys = ("ticker_row_", "holding_cost_", "holding_qty_")
+        vals = {k: [st.session_state.get(f"{k}{j}", "") for j in range(n)] for k in keys}
+        for k in keys:
+            vals[k].pop(idx)
+            for j in range(n - 1):
+                st.session_state[f"{k}{j}"] = vals[k][j]
+            st.session_state[f"{k}{n - 1}"] = ""   # clear the tail slot
+        st.session_state["ticker_count"] = max(1, n - 1)
+
+    # 任务标题：属于整个分析任务（一个任务可含多个标的），不是单标的
+    st.text_input(
+        "任务标题（可选）",
+        placeholder="本次分析任务的标题，可含一个或多个标的",
+        key="batch_title",
+        help="标题属于整个分析任务；留空则显示「批量分析 · N 个标的」或标的代码。",
     )
+
+    h1, h2, h3 = st.columns([4, 2, 2])
+    with h1:
+        st.caption("标的")
+    with h2:
+        st.caption("持仓均价")
+    with h3:
+        st.caption("持仓总量")
+
+    ticker_inputs: list[str] = []
+    for i in range(ticker_count):
+        # 每个任务一个分组容器：标的/持仓/删除对齐
+        with st.container(border=True):
+            c_t, c_p, c_q, c_x = st.columns([3, 1, 1, 1])
+            with c_t:
+                st.text_input(
+                    f"标的 {i+1}",
+                    placeholder="代码或名称",
+                    key=f"ticker_row_{i}",
+                    label_visibility="collapsed",
+                    on_change=_on_ticker_input, args=(i,),
+                    help="输入6位A股代码或中文股票全称；输入以 + 结尾可快速添加新行；"
+                         "每行可填该标的的持仓均价/总量，分析时联动。",
+                )
+            with c_p:
+                st.number_input(
+                    f"均价{i}", min_value=0.0, step=0.01, value=0.0, format="%.2f",
+                    key=f"holding_cost_{i}", label_visibility="collapsed",
+                    help="该标的持仓均价（留 0 = 无持仓，不生成持仓操作建议）",
+                )
+            with c_q:
+                st.number_input(
+                    f"总量{i}", min_value=0, step=100, value=0,
+                    key=f"holding_qty_{i}", label_visibility="collapsed",
+                    help="该标的持仓总量（股）",
+                )
+            with c_x:
+                st.write("")
+                st.button(
+                    "✖", key=f"remove_row_{i}", disabled=ticker_count <= 1,
+                    on_click=_remove_ticker_row, args=(i,), use_container_width=True,
+                    help="删除该标的行",
+                )
+        if val := st.session_state.get(f"ticker_row_{i}", ""):
+            if val.strip():
+                ticker_inputs.append(val.strip())
+    if st.button("➕ 添加标的", key="add_ticker_row", use_container_width=True):
+        st.session_state["ticker_count"] = ticker_count + 1
+
+    # 聚焦新行（尽力而为）：on_change 添加行后置标记，渲染时注入 iframe
+    # 聚焦最后一个标的输入框。若浏览器环境限制 iframe 访问 parent，
+    # 聚焦退化为手动点击（添加本身已由 on_change 可靠完成）。
+    if st.session_state.pop("focus_new_ticker", False):
+        st.iframe(
+            """
+            <script>
+            (function () {
+              var inputs = Array.prototype.slice.call(
+                  window.parent.document.querySelectorAll('input'))
+                  .filter(function (i) { return i.placeholder === '代码或名称'; });
+              if (inputs.length) {
+                var last = inputs[inputs.length - 1];
+                last.focus();
+                last.select();
+              }
+            })();
+            </script>
+            """,
+            height="content",
+        )
+
+    tickers = ticker_inputs
 
     trade_date = st.date_input(
         "分析日期",
@@ -293,16 +396,6 @@ def render_sidebar() -> None:
     with st.expander("⚙️ 模型配置", expanded=False):
         _render_llm_config()
 
-    with st.expander("💼 当前持仓（可选）", expanded=False):
-        st.number_input(
-            "持仓均价", min_value=0.0, step=0.01, value=0.0, key="holding_cost_price",
-            help="当前分析标的的持仓均价（成本）。留 0 = 无持仓，不生成持仓操作建议。",
-        )
-        st.number_input(
-            "持仓总量（股）", min_value=0, step=100, value=0, key="holding_quantity",
-            help="当前分析标的的持仓总量。",
-        )
-
     tracker = st.session_state.get("tracker")
     is_busy = tracker is not None and tracker.is_running
     is_stopping = is_busy and tracker.stop_requested
@@ -310,23 +403,41 @@ def render_sidebar() -> None:
     if st.button(
         "开始分析" if not is_busy else "停止中..." if is_stopping else "分析进行中...",
         use_container_width=True,
-        disabled=is_busy or not ticker,
+        disabled=is_busy or not tickers,
         type="primary",
     ):
-        resolved_code, err = _resolve_user_input(ticker)
-        if err:
-            st.error(f"❌ {err}")
-        else:
-            if resolved_code != ticker.strip():
-                st.success(f"✅ {ticker.strip()} → {resolved_code}")
+        resolved: list[str] = []
+        errors: list[str] = []
+        holdings_map: dict[str, dict] = {}
+        for i in range(ticker_count):
+            raw = st.session_state.get(f"ticker_row_{i}", "")
+            if not raw or not raw.strip():
+                continue
+            code, err = _resolve_user_input(raw.strip())
+            if err:
+                errors.append(f"{raw}: {err}")
+                continue
+            resolved.append(code)
+            # 每行标的联动该行持仓：均价 > 0 才视为有持仓
+            cost = float(st.session_state.get(f"holding_cost_{i}", 0.0) or 0.0)
+            if cost > 0:
+                qty = int(st.session_state.get(f"holding_qty_{i}", 0) or 0)
+                holdings_map[code] = {"quantity": qty, "cost_price": cost}
+        if errors:
+            st.error("❌ " + "；".join(errors))
+        elif resolved:
+            # 任务标题属于整个分析任务（一个任务可含多个标的）
+            batch_title = str(st.session_state.get("batch_title", "") or "").strip()
             st.session_state["start_analysis"] = {
-                "ticker": resolved_code,
+                "tickers": resolved,
                 "trade_date": trade_date.strftime("%Y-%m-%d"),
+                "holdings_map": holdings_map,
+                "title": batch_title,
                 "fresh": True,
             }
             st.session_state["viewing_history"] = None
 
-    _render_analysis_controls(ticker, trade_date)
+    _render_analysis_controls(tickers[0] if tickers else "", trade_date)
 
     st.markdown("---")
     st.markdown("#### 未完成任务")
@@ -359,18 +470,12 @@ def render_sidebar() -> None:
 
     st.markdown("---")
     st.markdown("#### 历史记录")
-
-    history = get_history()
-    if not history:
-        st.caption("暂无历史记录")
-        return
-
-    for entry in history[:20]:
-        t, d = entry["ticker"], entry["date"]
-        label = f"{t}  ·  {d}"
-        if st.button(label, key=f"hist_{t}_{d}", use_container_width=True):
-            st.session_state["viewing_history"] = entry["path"]
-            st.session_state["start_analysis"] = None
-
+    if st.button("📅 打开历史日历", key="open_calendar", use_container_width=True):
+        st.session_state["show_calendar"] = True
+        st.session_state.pop("history_board", None)
+        st.session_state.pop("active_task", None)
+        st.session_state["viewing_history"] = None
+        st.session_state["viewing_batch"] = None
+        st.rerun()
     st.markdown("---")
     st.caption("⚠️ 仅供学习研究，不构成投资建议")
